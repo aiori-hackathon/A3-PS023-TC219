@@ -12,6 +12,7 @@ A production-grade, lightweight, authenticated, and resource-aware virtual machi
 
 ## 📺 Project Resources
 
+- **Demo Video:** [YouTube Video](https://www.youtube.com/watch?v=4qsTIsR8GiE)
 - **Orientation & Architecture Walkthrough:** [YouTube Video](https://www.youtube.com/watch?v=lNd5x0wZsCU)
 - **Official Presentation:** [`A3-PS023-TC219_AIORI3_Presentation.pdf`](A3-PS023-TC219_AIORI3_Presentation.pdf)
 - **Problem Statement:** PS-023 (Minimal Two-Node Cloud Hypervisor VM Controller)
