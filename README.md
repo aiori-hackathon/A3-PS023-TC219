@@ -358,9 +358,9 @@ curl -s -X DELETE http://localhost:8080/vms/vm-1 \
 
 | Name | Role | Responsibilities |
 |---|---|---|
-| **Soham Chakraborti** | Controller Lead | Central controller, scheduling algorithms, and Web UI |
-| **Ishita Roy** | Worker Agent Lead | Worker agents, hypervisor integration, and SSH bridging |
-| **Faculty Advisor** | Assistant Professor | Academic mentorship and project review |
+| **Hrittik Biswas** | Controller Lead | Central controller, scheduling algorithms, and Web UI |
+| **Reek Saha** | Worker Agent Lead | Worker agents, hypervisor integration, and SSH bridging |
+| **Joy Sammandar** | Assistant Professor | Academic mentorship and project review |
 
 ---
 
