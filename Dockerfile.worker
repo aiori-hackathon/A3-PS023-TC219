@@ -1,0 +1,35 @@
+# Standalone Dockerfile for Worker
+FROM golang:alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY src/ ./src/
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -o /out/worker ./src/cmd/worker
+
+FROM alpine:latest
+ARG TARGETARCH
+RUN apk add --no-cache ca-certificates curl tzdata && \
+    case "${TARGETARCH}" in \
+      arm64|aarch64) CH_URL="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v54.0/cloud-hypervisor-static-aarch64" ;; \
+      *) CH_URL="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v54.0/cloud-hypervisor-static" ;; \
+    esac && \
+    (curl -fsSL "${CH_URL}" -o /usr/local/bin/cloud-hypervisor && chmod +x /usr/local/bin/cloud-hypervisor) || \
+    echo "Warning: Cloud Hypervisor static binary could not be fetched. Will use Mock driver if /dev/kvm is missing."
+
+WORKDIR /app
+COPY --from=builder /out/worker /usr/local/bin/worker
+
+ENV WORKER_ADDR="0.0.0.0:8081" \
+    DATA_DIR="/data" \
+    HYPERVISOR_DRIVER="auto" \
+    CH_BIN="/usr/local/bin/cloud-hypervisor"
+
+EXPOSE 8081 8082 2201-2220 2301-2320
+VOLUME ["/data"]
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=5 --start-period=3s \
+  CMD curl -f "http://localhost:${WORKER_ADDR##*:}/health" || exit 1
+
+ENTRYPOINT ["/usr/local/bin/worker"]

@@ -1,0 +1,17 @@
+# Docker Compose override file for Linux hosts with hardware /dev/kvm acceleration.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.kvm.yml up -d
+#
+services:
+  worker-1:
+    devices:
+      - /dev/kvm:/dev/kvm
+    environment:
+      - HYPERVISOR_DRIVER=cloud-hypervisor
+
+  worker-2:
+    devices:
+      - /dev/kvm:/dev/kvm
+    environment:
+      - HYPERVISOR_DRIVER=cloud-hypervisor

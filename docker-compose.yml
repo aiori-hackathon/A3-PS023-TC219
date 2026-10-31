@@ -1,0 +1,106 @@
+services:
+  controller:
+    build:
+      context: .
+      target: controller
+    image: vm-controller:latest
+    container_name: vm-controller
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - CONTROLLER_ADDR=0.0.0.0:8080
+      - CONTROLLER_DATA_DIR=/data
+      - CONTROLLER_TOKEN=secret-controller-key
+      - WORKER_1_ID=worker-1
+      - WORKER_1_URL=http://worker-1:8081
+      - WORKER_1_TOKEN=secret-worker-key
+      - WORKER_2_ID=worker-2
+      - WORKER_2_URL=http://worker-2:8082
+      - WORKER_2_TOKEN=secret-worker-key
+    volumes:
+      - controller-data:/data
+    depends_on:
+      worker-1:
+        condition: service_healthy
+      worker-2:
+        condition: service_healthy
+    networks:
+      - kvm-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  worker-1:
+    build:
+      context: .
+      target: worker
+    image: vm-worker:latest
+    container_name: vm-worker-1
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+      - "2201-2220:2201-2220"
+    environment:
+      - WORKER_ID=worker-1
+      - WORKER_ADDR=0.0.0.0:8081
+      - WORKER_TOKEN=secret-worker-key
+      - DATA_DIR=/data
+      - TOTAL_MEMORY_MB=4096
+      - HYPERVISOR_DRIVER=auto
+      - CH_BIN=/usr/local/bin/cloud-hypervisor
+    volumes:
+      - worker1-data:/data
+    networks:
+      - kvm-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  worker-2:
+    build:
+      context: .
+      target: worker
+    image: vm-worker:latest
+    container_name: vm-worker-2
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+      - "2301-2320:2301-2320"
+    environment:
+      - WORKER_ID=worker-2
+      - WORKER_ADDR=0.0.0.0:8082
+      - WORKER_TOKEN=secret-worker-key
+      - DATA_DIR=/data
+      - TOTAL_MEMORY_MB=4096
+      - HYPERVISOR_DRIVER=auto
+      - CH_BIN=/usr/local/bin/cloud-hypervisor
+    volumes:
+      - worker2-data:/data
+    networks:
+      - kvm-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+volumes:
+  controller-data:
+    name: vm-controller-data
+  worker1-data:
+    name: vm-worker1-data
+  worker2-data:
+    name: vm-worker2-data
+
+networks:
+  kvm-net:
+    name: vm-kvm-net
+    driver: bridge

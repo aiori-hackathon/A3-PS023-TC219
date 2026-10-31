@@ -1,0 +1,26 @@
+# Standalone Dockerfile for Controller
+FROM golang:alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY src/ ./src/
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -o /out/controller ./src/cmd/controller
+
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates curl tzdata
+WORKDIR /app
+COPY --from=builder /out/controller /usr/local/bin/controller
+
+ENV CONTROLLER_ADDR="0.0.0.0:8080" \
+    CONTROLLER_DATA_DIR="/data" \
+    CONTROLLER_TOKEN="secret-controller-key"
+
+EXPOSE 8080
+VOLUME ["/data"]
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=5 --start-period=3s \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/controller"]

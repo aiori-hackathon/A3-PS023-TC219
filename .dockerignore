@@ -1,0 +1,9 @@
+.git
+.gitignore
+bin/
+*.db
+*.db-wal
+*.db-shm
+*.pdf
+.system_generated/
+scratch/
