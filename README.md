@@ -35,47 +35,138 @@ Managing a small number of KVM virtualization hosts does not require heavyweight
 
 ## 🏗️ Architecture & Component Model
 
+### System Architecture Diagram
+
+```mermaid
+flowchart TD
+    %% Clients Layer
+    subgraph Clients ["Clients & External Access"]
+        Browser["Web Browser (UI: http://localhost:8080)"]
+        APIClient["API Client / cURL (Bearer Token Auth)"]
+        SSHClient["SSH Client (ssh minix@localhost -p 2201 / 2301)"]
+    end
+
+    %% Central Controller Container
+    subgraph ControllerContainer ["Docker Container: vm-controller (Port 8080)"]
+        direction TB
+        HttpServer["HTTP Router & API Handler"]
+        WebUI["Embedded Web Dashboard"]
+        PlacementEngine["Memory-Aware Placement Engine (512MB Reserve & Tie-Breaker)"]
+        ReservationLock["In-Flight Memory Reservation Mutex"]
+        Reconciler["Background Health Reconciler Loop"]
+        ControllerDB[("SQLite Store (controller.db)")]
+
+        HttpServer --> WebUI
+        HttpServer --> PlacementEngine
+        PlacementEngine --> ReservationLock
+        HttpServer --> Reconciler
+        HttpServer --> ControllerDB
+        Reconciler --> ControllerDB
+    end
+
+    %% Networking
+    Clients -->|"HTTP :8080"| HttpServer
+    SSHClient -.->|"TCP :2201-2220"| Worker1_SSH
+    SSHClient -.->|"TCP :2301-2320"| Worker2_SSH
+
+    subgraph DockerNetwork ["Internal Docker Bridge Network: vm-kvm-net"]
+        HttpServer -->|"HTTP /vms, /health (worker-1:8081)"| Worker1_API
+        HttpServer -->|"HTTP /vms, /health (worker-2:8082)"| Worker2_API
+    end
+
+    %% Worker 1 Container
+    subgraph Worker1Container ["Docker Container: vm-worker-1 (Port 8081)"]
+        direction TB
+        Worker1_API["Worker Agent REST API (Port 8081)"]
+        Worker1_SM["Deterministic VM State Machine"]
+        Worker1_SSH["SSH Bridge Server (Ports 2201-2220)"]
+        Worker1_Driver["Hypervisor Driver Abstraction"]
+        Worker1_CH["Cloud Hypervisor v54.0"]
+        Worker1_Mock["Mock Hypervisor Engine (Interactive Shell)"]
+        Worker1_DB[("SQLite Store (worker.db)")]
+        Worker1_Disks["VM Disks & Unix Sockets (/data)"]
+
+        Worker1_API --> Worker1_SM
+        Worker1_SM --> Worker1_Driver
+        Worker1_Driver --> Worker1_CH
+        Worker1_Driver --> Worker1_Mock
+        Worker1_API --> Worker1_DB
+        Worker1_SSH -->|"Bridge to serial.sock"| Worker1_Disks
+        Worker1_Driver --> Worker1_Disks
+    end
+
+    %% Worker 2 Container
+    subgraph Worker2Container ["Docker Container: vm-worker-2 (Port 8082)"]
+        direction TB
+        Worker2_API["Worker Agent REST API (Port 8082)"]
+        Worker2_SM["Deterministic VM State Machine"]
+        Worker2_SSH["SSH Bridge Server (Ports 2301-2320)"]
+        Worker2_Driver["Hypervisor Driver Abstraction"]
+        Worker2_CH["Cloud Hypervisor v54.0"]
+        Worker2_Mock["Mock Hypervisor Engine (Interactive Shell)"]
+        Worker2_DB[("SQLite Store (worker.db)")]
+        Worker2_Disks["VM Disks & Unix Sockets (/data)"]
+
+        Worker2_API --> Worker2_SM
+        Worker2_SM --> Worker2_Driver
+        Worker2_Driver --> Worker2_CH
+        Worker2_Driver --> Worker2_Mock
+        Worker2_API --> Worker2_DB
+        Worker2_SSH -->|"Bridge to serial.sock"| Worker2_Disks
+        Worker2_Driver --> Worker2_Disks
+    end
+
+    %% Host Virtualization Layer
+    subgraph HostVirtualization ["Underlying Host Execution Layer"]
+        KVM["Linux Hardware KVM (/dev/kvm) - with docker-compose.kvm.yml"]
+        CrossPlatform["macOS / Windows / Non-KVM Linux - standard docker-compose.yml"]
+    end
+
+    Worker1_CH --> KVM
+    Worker2_CH --> KVM
+    Worker1_Mock --> CrossPlatform
+    Worker2_Mock --> CrossPlatform
 ```
-                                  +---------------------------------------+
-                                  |            CLIENT / BROWSER           |
-                                  |  - Web Dashboard (http://localhost:8080)
-                                  |  - REST API Client (Bearer Auth)       |
-                                  |  - SSH Client (ssh -p 2201 / 2301)    |
-                                  +-------------------+-------------------+
-                                                      |
-                                                      v
-                                  +---------------------------------------+
-                                  |          CENTRAL CONTROLLER           |
-                                  |  Container: vm-controller (Port 8080) |
-                                  |                                       |
-                                  |  - REST Handler & Embedded Web UI     |
-                                  |  - Memory-Aware Placement Engine      |
-                                  |  - Auto-Discovery Reconciler Loop     |
-                                  |  - SQLite Store (controller.db)       |
-                                  +---------+-------------------+---------+
-                                            |                   |
-                     Internal Bridge Net    |                   |   Internal Bridge Net
-                     (http://worker-1:8081) |                   |   (http://worker-2:8082)
-                                            v                   v
-                     +---------------------------+ +---------------------------+
-                     |         WORKER 1          | |         WORKER 2          |
-                     | Container: vm-worker-1    | | Container: vm-worker-2    |
-                     | Ports: 8081, 2201-2220    | | Ports: 8082, 2301-2320    |
-                     +---------------------------+ +---------------------------+
-                     | - REST Agent API          | | - REST Agent API          |
-                     | - Driver Abstraction:     | | - Driver Abstraction:     |
-                     |   * Cloud Hypervisor      | |   * Cloud Hypervisor      |
-                     |   * Mock Hypervisor       | |   * Mock Hypervisor       |
-                     | - SSH Serial Bridge       | | - SSH Serial Bridge       |
-                     | - SQLite Store (worker.db)| | - SQLite Store (worker.db)|
-                     | - VM Sockets & Disks      | | - VM Sockets & Disks      |
-                     +-------------+-------------+ +-------------+-------------+
-                                   |                             |
-                                   v                             v
-                     +---------------------------+ +---------------------------+
-                     | Linux /dev/kvm (Hardware) | | Linux /dev/kvm (Hardware) |
-                     |   or Built-in Mock PTY    | |   or Built-in Mock PTY    |
-                     +---------------------------+ +---------------------------+
+
+### VM Placement & Lifecycle Execution Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User / Web UI
+    participant C as Controller (vm-controller)
+    participant DB as SQLite DB
+    participant W1 as Worker 1 (vm-worker-1)
+    participant W2 as Worker 2 (vm-worker-2)
+    participant SSH as SSH Bridge
+
+    User->>C: POST /vms (Create Request: 1-4 vCPUs, 512MB RAM)
+    C->>W1: GET /resources (Query Capacity & Active VMs)
+    W1-->>C: Available RAM, Reserve (512MB), Running VMs
+    C->>W2: GET /resources (Query Capacity & Active VMs)
+    W2-->>C: Available RAM, Reserve (512MB), Running VMs
+
+    Note over C: Placement Algorithm: Evaluates max(Free - 512MB)<br/>Breaks ties by fewest running VMs
+    C->>C: Acquire In-Flight Reservation Lock
+    C->>DB: Save VM in CREATING State
+    C->>W1: POST /vms (Forward Create to Selected Host)
+    W1->>W1: Allocate Disk, Unix Socket & IP
+    W1->>W1: Save in Worker SQLite
+    W1-->>C: 200 OK (VM Created)
+    C->>DB: Update VM to CREATED State
+    C-->>User: 200 OK (VM in CREATED State)
+
+    User->>C: POST /vms/{id}/start
+    C->>W1: POST /vms/{id}/start
+    W1->>W1: Boot Hypervisor (Cloud Hypervisor or Mock)
+    W1->>SSH: Bind SSH Bridge on Port 2201 -> serial.sock
+    W1-->>C: 200 OK (VM RUNNING, SSH Port 2201)
+    C->>DB: Update VM to RUNNING State
+    C-->>User: 200 OK (VM RUNNING)
+
+    User->>SSH: ssh -p 2201 minix@localhost
+    SSH->>W1: Connect to serial.sock
+    W1-->>User: Interactive MINIX 3 Console (minix# )
 ```
 
 ### 1. Central Controller (`src/cmd/controller`)
