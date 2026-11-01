@@ -3,14 +3,17 @@ package worker
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 	"vm-controller/src/pkg/models"
+
+	"github.com/creack/pty"
 )
 
 // MockVMInstance simulates an active VM instance.
@@ -79,6 +82,15 @@ func (m *MockHypervisor) CreateVM(ctx context.Context, vm *models.VM) error {
 		_ = os.RemoveAll(vmDir)
 		return fmt.Errorf("failed to create mock serial: %w", err)
 	}
+
+	welcomeMsg := fmt.Sprintf("===============================================================\n"+
+		" Welcome to %s (VM ID: %s)\n"+
+		" Guest OS: %s | vCPUs: %d | Memory: %dMB\n"+
+		" Serial Console: ttyS0\n"+
+		" Type real OS commands: ls, uname, cat, touch, top, etc.\n"+
+		"===============================================================\n",
+		vm.Name, vm.ID, vm.OS, vm.VCPUs, vm.MemoryMB)
+	_ = os.WriteFile(filepath.Join(vmDir, "welcome.txt"), []byte(welcomeMsg), 0644)
 
 	vm.SerialSocket = serialPath
 	m.pidSeq++
@@ -300,7 +312,7 @@ func (m *MockHypervisor) startSerialConsoleLocked(inst *MockVMInstance) {
 	inst.SerialListener = l
 	inst.SerialStop = make(chan struct{})
 
-	go func(vm models.VM, listener net.Listener, stopCh chan struct{}) {
+	go func(vm models.VM, vmDir string, listener net.Listener, stopCh chan struct{}) {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -311,9 +323,9 @@ func (m *MockHypervisor) startSerialConsoleLocked(inst *MockVMInstance) {
 					return
 				}
 			}
-			go handleMockSerialConnection(conn, vm, stopCh)
+			go handleRealShellConnection(conn, vm, vmDir, stopCh)
 		}
-	}(inst.VM, l, inst.SerialStop)
+	}(inst.VM, inst.Dir, l, inst.SerialStop)
 }
 
 func (m *MockHypervisor) stopSerialConsoleLocked(inst *MockVMInstance) {
@@ -330,169 +342,91 @@ func (m *MockHypervisor) stopSerialConsoleLocked(inst *MockVMInstance) {
 	}
 }
 
-func handleMockSerialConnection(conn net.Conn, vm models.VM, stopCh <-chan struct{}) {
+// handleRealShellConnection launches a genuine interactive OS shell on a pseudo-terminal (PTY)
+// and connects it to the VM serial socket.
+func handleRealShellConnection(conn net.Conn, vm models.VM, vmDir string, stopCh <-chan struct{}) {
 	defer conn.Close()
 
-	banner := fmt.Sprintf("\r\n"+
-		"===============================================================\r\n"+
-		" Welcome to MINIX 3 (x86_64) - Cloud Hypervisor Virtual Machine\r\n"+
-		" VM: %s | Name: %s | vCPUs: %d | Memory: %dMB\r\n"+
-		" System State: RUNNING | Console: ttyS0\r\n"+
-		" Type 'help' for commands, or 'exit' to disconnect.\r\n"+
-		"===============================================================\r\n\r\n"+
-		"minix# ", vm.ID, vm.Name, vm.VCPUs, vm.MemoryMB)
+	osName := vm.OS
+	if osName == "" {
+		osName = "Linux"
+	}
 
+	banner := fmt.Sprintf("\r\n\r\n"+
+		"===============================================================\r\n"+
+		" Virtual Machine: %s (%s) | %d vCPU(s) | %d MB Memory\r\n"+
+		" Guest OS: %s | Serial Console: ttyS0\r\n"+
+		" Interactive Shell Connected.\r\n"+
+		"===============================================================\r\n\r\n",
+		vm.ID, vm.Name, vm.VCPUs, vm.MemoryMB, osName)
 	_, _ = conn.Write([]byte(banner))
 
-	buf := make([]byte, 1024)
-	var lineBuf []byte
-	lastWasCR := false
-
-	for {
-		select {
-		case <-stopCh:
-			return
-		default:
-		}
-
-		n, err := conn.Read(buf)
-		if err != nil {
-			return
-		}
-
-		for i := 0; i < n; i++ {
-			b := buf[i]
-
-			if b == '\r' {
-				lastWasCR = true
-				_, _ = conn.Write([]byte("\r\n"))
-				executeMockCommand(conn, vm, string(lineBuf))
-				lineBuf = nil
-				_, _ = conn.Write([]byte("minix# "))
-			} else if b == '\n' {
-				if lastWasCR {
-					lastWasCR = false
-					continue
-				}
-				_, _ = conn.Write([]byte("\r\n"))
-				executeMockCommand(conn, vm, string(lineBuf))
-				lineBuf = nil
-				_, _ = conn.Write([]byte("minix# "))
-			} else {
-				lastWasCR = false
-				switch b {
-				case 0x7f, 0x08: // Backspace
-					if len(lineBuf) > 0 {
-						lineBuf = lineBuf[:len(lineBuf)-1]
-						_, _ = conn.Write([]byte("\b \b"))
-					}
-				case 0x03: // Ctrl+C
-					lineBuf = nil
-					_, _ = conn.Write([]byte("^C\r\nminix# "))
-				case 0x04: // Ctrl+D (EOF)
-					if len(lineBuf) == 0 {
-						_, _ = conn.Write([]byte("\r\nLogout.\r\n"))
-						return
-					}
-				default:
-					if b >= 32 && b <= 126 {
-						lineBuf = append(lineBuf, b)
-						_, _ = conn.Write([]byte{b})
-					}
-				}
-			}
-		}
+	shell := "/bin/sh"
+	if bashPath, err := exec.LookPath("bash"); err == nil {
+		shell = bashPath
+	} else if shPath, err := exec.LookPath("sh"); err == nil {
+		shell = shPath
 	}
-}
 
-func executeMockCommand(conn net.Conn, vm models.VM, rawCmd string) {
-	cmd := strings.TrimSpace(rawCmd)
-	if cmd == "" {
+	cmd := exec.Command(shell, "-i")
+	cmd.Dir = vmDir
+	cmd.Env = []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"TERM=xterm-256color",
+		"HOME=" + vmDir,
+		"USER=root",
+		"LOGNAME=root",
+		"SHELL=" + shell,
+		"PS1=root@vm-" + vm.ID + ":~# ",
+	}
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		// Fallback to stdio pipes if pseudo-terminal is unavailable
+		cmd.Stdin = conn
+		cmd.Stdout = conn
+		cmd.Stderr = conn
+		if err := cmd.Start(); err != nil {
+			_, _ = conn.Write([]byte(fmt.Sprintf("Failed to spawn shell: %v\r\n", err)))
+			return
+		}
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-stopCh:
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+			case <-done:
+			}
+		}()
+		_ = cmd.Wait()
+		close(done)
 		return
 	}
 
-	parts := strings.Fields(cmd)
-	rootCmd := parts[0]
-
-	switch rootCmd {
-	case "help":
-		helpText := "Available commands:\r\n" +
-			"  help          - Show this help menu\r\n" +
-			"  uname [-a]    - Print system and kernel information\r\n" +
-			"  whoami        - Print current user\r\n" +
-			"  uptime        - Print system uptime and load\r\n" +
-			"  free [-m]     - Print memory utilization\r\n" +
-			"  ps [aux]      - Print active process table\r\n" +
-			"  cat <file>    - Display simulated file (/etc/os-release, /etc/issue)\r\n" +
-			"  date          - Show current system date and time\r\n" +
-			"  echo <text>   - Echo text back to console\r\n" +
-			"  clear         - Clear terminal screen\r\n" +
-			"  exit, quit    - Close console session\r\n"
-		_, _ = conn.Write([]byte(helpText))
-
-	case "uname":
-		_, _ = conn.Write([]byte("Minix localhost 3.4.0 #1 SMP x86_64\r\n"))
-
-	case "whoami", "id":
-		_, _ = conn.Write([]byte("root (uid=0 gid=0 groups=0(wheel))\r\n"))
-
-	case "uptime":
-		_, _ = conn.Write([]byte(fmt.Sprintf(" %s up 15 min,  1 user,  load average: 0.08, 0.02, 0.01\r\n", time.Now().Format("15:04:05"))))
-
-	case "free":
-		total := vm.MemoryMB
-		used := int(float64(total) * 0.28)
-		free := total - used
-		freeText := fmt.Sprintf("              total        used        free      shared  buff/cache   available\r\n"+
-			"Mem:        %7d     %7d     %7d           0           0     %7d\r\n"+
-			"Swap:             0           0           0\r\n", total, used, free, free)
-		_, _ = conn.Write([]byte(freeText))
-
-	case "ps":
-		psText := "  PID TTY          TIME CMD\r\n" +
-			"    1 ttyS0    00:00:01 init\r\n" +
-			"    2 ?        00:00:00 system\r\n" +
-			"    3 ?        00:00:00 pm\r\n" +
-			"    4 ?        00:00:00 fs\r\n" +
-			"    5 ?        00:00:00 rs\r\n" +
-			"    6 ?        00:00:00 ds\r\n" +
-			"    7 ttyS0    00:00:00 tty\r\n" +
-			"    8 ttyS0    00:00:00 sh\r\n"
-		_, _ = conn.Write([]byte(psText))
-
-	case "cat":
-		if len(parts) > 1 && (parts[1] == "/etc/os-release" || parts[1] == "/etc/issue") {
-			osRel := "NAME=\"MINIX 3\"\r\n" +
-				"VERSION=\"3.4.0\"\r\n" +
-				"ID=minix\r\n" +
-				"PRETTY_NAME=\"MINIX 3.4.0 (x86_64)\"\r\n" +
-				"HOME_URL=\"https://minix3.org/\"\r\n"
-			_, _ = conn.Write([]byte(osRel))
-		} else if len(parts) > 1 {
-			_, _ = conn.Write([]byte(fmt.Sprintf("cat: %s: No such file or directory\r\n", parts[1])))
-		} else {
-			_, _ = conn.Write([]byte("cat: missing operand\r\n"))
+	defer func() {
+		_ = ptmx.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
 		}
+	}()
 
-	case "echo":
-		if len(parts) > 1 {
-			text := strings.TrimPrefix(cmd, "echo ")
-			_, _ = conn.Write([]byte(text + "\r\n"))
-		} else {
-			_, _ = conn.Write([]byte("\r\n"))
-		}
+	done := make(chan struct{}, 2)
 
-	case "date":
-		_, _ = conn.Write([]byte(time.Now().UTC().Format(time.UnixDate) + "\r\n"))
+	go func() {
+		_, _ = io.Copy(ptmx, conn)
+		done <- struct{}{}
+	}()
 
-	case "clear":
-		_, _ = conn.Write([]byte("\033[H\033[2J"))
+	go func() {
+		_, _ = io.Copy(conn, ptmx)
+		done <- struct{}{}
+	}()
 
-	case "exit", "quit", "logout":
-		_, _ = conn.Write([]byte("Logout.\r\n"))
-		_ = conn.Close()
-
-	default:
-		_, _ = conn.Write([]byte(fmt.Sprintf("minix: %s: command not found\r\n", rootCmd)))
+	select {
+	case <-stopCh:
+	case <-done:
 	}
 }

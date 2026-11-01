@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
 # Stage 2: Shared Alpine runtime base
 # -------------------------------------------------------------
 FROM alpine:latest AS runtime-base
-RUN apk add --no-cache ca-certificates curl tzdata
+RUN apk add --no-cache ca-certificates curl tzdata bash coreutils procps util-linux
 
 # -------------------------------------------------------------
 # Stage 3: Controller Container

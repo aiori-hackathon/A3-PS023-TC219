@@ -582,14 +582,14 @@ func TestMockHypervisorSSHBridge(t *testing.T) {
 			if n > 0 {
 				chunk := string(buf[:n])
 				output += chunk
-				if !sentCommand && strings.Contains(output, "minix# ") {
+				if !sentCommand && (strings.Contains(output, "Interactive Shell Connected") || strings.Contains(output, "#") || strings.Contains(output, "$")) {
 					sentCommand = true
 					go func() {
 						time.Sleep(100 * time.Millisecond)
-						_, _ = stdinPipe.Write([]byte("uname -a\r"))
+						_, _ = stdinPipe.Write([]byte("echo REAL_SHELL_OK\r"))
 					}()
 				}
-				if strings.Contains(output, "Minix localhost") {
+				if strings.Contains(output, "REAL_SHELL_OK") {
 					readDone <- true
 					return
 				}

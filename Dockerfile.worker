@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
 
 FROM alpine:latest
 ARG TARGETARCH
-RUN apk add --no-cache ca-certificates curl tzdata && \
+RUN apk add --no-cache ca-certificates curl tzdata bash coreutils procps util-linux && \
     case "${TARGETARCH}" in \
       arm64|aarch64) CH_URL="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v54.0/cloud-hypervisor-static-aarch64" ;; \
       *) CH_URL="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v54.0/cloud-hypervisor-static" ;; \
