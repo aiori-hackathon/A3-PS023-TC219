@@ -67,7 +67,7 @@ func detectHostKernel() string {
 
 func ensureDefaultInitramfs(baseDir string) string {
 	initrdPath := filepath.Join(baseDir, "guest-initramfs.cpio.gz")
-	versionFile := filepath.Join(baseDir, ".initramfs.v3")
+	versionFile := filepath.Join(baseDir, ".initramfs.v4")
 	if _, err := os.Stat(initrdPath); err == nil {
 		if _, err := os.Stat(versionFile); err == nil {
 			return initrdPath
@@ -106,14 +106,6 @@ func ensureDefaultInitramfs(baseDir string) string {
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
-echo ""
-echo "=========================================================="
-echo " Welcome to MINIX 3 / Microkernel Guest VM"
-echo " Node: Cloud Hypervisor on Linux KVM"
-echo " Interactive shell ready."
-echo " Disconnect: press Ctrl+D"
-echo "=========================================================="
-echo ""
 while true; do
   /bin/busybox getty -n -l /bin/sh -L 115200 ttyS0 vt100 2>/dev/null || /bin/busybox sh </dev/ttyS0 >/dev/ttyS0 2>&1 || /bin/busybox sh
   sleep 1
@@ -123,7 +115,7 @@ done
 
 	cmd := exec.Command("sh", "-c", fmt.Sprintf("cd %s && find . | cpio -o -H newc | gzip > %s", buildDir, initrdPath))
 	if err := cmd.Run(); err == nil {
-		_ = os.WriteFile(versionFile, []byte("v3"), 0644)
+		_ = os.WriteFile(versionFile, []byte("v4"), 0644)
 		return initrdPath
 	}
 	return ""
