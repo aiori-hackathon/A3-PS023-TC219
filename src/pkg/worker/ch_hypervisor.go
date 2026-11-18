@@ -67,7 +67,7 @@ func detectHostKernel() string {
 
 func ensureDefaultInitramfs(baseDir string) string {
 	initrdPath := filepath.Join(baseDir, "guest-initramfs.cpio.gz")
-	versionFile := filepath.Join(baseDir, ".initramfs.v2")
+	versionFile := filepath.Join(baseDir, ".initramfs.v3")
 	if _, err := os.Stat(initrdPath); err == nil {
 		if _, err := os.Stat(versionFile); err == nil {
 			return initrdPath
@@ -111,7 +111,7 @@ echo "=========================================================="
 echo " Welcome to MINIX 3 / Microkernel Guest VM"
 echo " Node: Cloud Hypervisor on Linux KVM"
 echo " Interactive shell ready."
-echo " Disconnect: type 'exit', press Ctrl+D, or Enter '~.'"
+echo " Disconnect: press Ctrl+D"
 echo "=========================================================="
 echo ""
 while true; do
@@ -123,7 +123,7 @@ done
 
 	cmd := exec.Command("sh", "-c", fmt.Sprintf("cd %s && find . | cpio -o -H newc | gzip > %s", buildDir, initrdPath))
 	if err := cmd.Run(); err == nil {
-		_ = os.WriteFile(versionFile, []byte("v2"), 0644)
+		_ = os.WriteFile(versionFile, []byte("v3"), 0644)
 		return initrdPath
 	}
 	return ""

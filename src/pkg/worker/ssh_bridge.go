@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -202,7 +201,6 @@ func (b *SSHBridge) bridgeToSerial(sConn *ssh.ServerConn, channel ssh.Channel) {
 		}()
 
 		buf := make([]byte, 1024)
-		var lineBuf []byte
 
 		for {
 			n, err := channel.Read(buf)
@@ -211,29 +209,9 @@ func (b *SSHBridge) bridgeToSerial(sConn *ssh.ServerConn, channel ssh.Channel) {
 				shouldExit := false
 
 				for i := 0; i < len(data); i++ {
-					ch := data[i]
-					if ch == 0x04 { // Ctrl+D (EOT)
+					if data[i] == 0x04 { // Ctrl+D (EOT)
 						shouldExit = true
 						break
-					} else if ch == '\r' || ch == '\n' {
-						cmd := strings.TrimSpace(string(lineBuf))
-						if cmd == "exit" || cmd == "logout" || cmd == "quit" || cmd == "~." || cmd == "~" {
-							shouldExit = true
-							break
-						}
-						lineBuf = lineBuf[:0]
-					} else if ch == 0x7f || ch == 0x08 { // Backspace
-						if len(lineBuf) > 0 {
-							lineBuf = lineBuf[:len(lineBuf)-1]
-						}
-					} else if ch == 0x03 { // Ctrl+C
-						lineBuf = lineBuf[:0]
-					} else if ch >= 0x20 && ch <= 0x7e { // printable ASCII
-						lineBuf = append(lineBuf, ch)
-						if strings.HasSuffix(string(lineBuf), "~.") {
-							shouldExit = true
-							break
-						}
 					}
 				}
 
