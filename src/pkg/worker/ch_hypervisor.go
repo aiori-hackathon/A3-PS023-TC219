@@ -108,10 +108,11 @@ echo "=========================================================="
 echo " Welcome to MINIX 3 / Microkernel Guest VM"
 echo " Node: Cloud Hypervisor on Linux KVM"
 echo " Interactive shell ready."
+echo " Disconnect: type 'exit', press Ctrl+D, or Enter '~.'"
 echo "=========================================================="
 echo ""
 while true; do
-  /bin/busybox sh </dev/ttyS0 >/dev/ttyS0 2>&1 || /bin/busybox sh
+  /bin/busybox getty -n -l /bin/sh -L 115200 ttyS0 vt100 2>/dev/null || /bin/busybox sh </dev/ttyS0 >/dev/ttyS0 2>&1 || /bin/busybox sh
   sleep 1
 done
 `

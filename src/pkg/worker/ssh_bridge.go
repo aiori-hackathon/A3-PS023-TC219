@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -162,9 +164,65 @@ func (b *SSHBridge) bridgeToSerial(channel ssh.Channel) {
 	}()
 
 	go func() {
-		_, _ = io.Copy(sockConn, channel)
-		_ = sockConn.Close()
-		done <- struct{}{}
+		defer func() {
+			_ = sockConn.Close()
+			done <- struct{}{}
+		}()
+
+		buf := make([]byte, 1024)
+		var lineBuf []byte
+		atLineStart := true
+
+		for {
+			n, err := channel.Read(buf)
+			if n > 0 {
+				data := buf[:n]
+				shouldExit := false
+
+				for i := 0; i < len(data); i++ {
+					ch := data[i]
+					if ch == 0x04 { // Ctrl+D (EOT)
+						if atLineStart || len(lineBuf) == 0 {
+							shouldExit = true
+							break
+						}
+					} else if ch == '\r' || ch == '\n' {
+						cmd := strings.TrimSpace(string(lineBuf))
+						if cmd == "exit" || cmd == "logout" || cmd == "quit" {
+							shouldExit = true
+							break
+						}
+						lineBuf = lineBuf[:0]
+						atLineStart = true
+					} else if ch == 0x7f || ch == 0x08 { // Backspace
+						if len(lineBuf) > 0 {
+							lineBuf = lineBuf[:len(lineBuf)-1]
+						}
+					} else if ch == 0x03 { // Ctrl+C
+						lineBuf = lineBuf[:0]
+						atLineStart = true
+					} else if ch >= 0x20 && ch <= 0x7e { // printable ASCII
+						lineBuf = append(lineBuf, ch)
+						atLineStart = false
+					}
+				}
+
+				// Forward all typed bytes to the guest VM serial socket
+				if _, writeErr := sockConn.Write(data); writeErr != nil {
+					return
+				}
+
+				if shouldExit {
+					time.Sleep(100 * time.Millisecond)
+					_, _ = channel.Write([]byte("\r\nConnection to VM console closed.\r\n"))
+					_ = channel.Close()
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
 	}()
 
 	<-done

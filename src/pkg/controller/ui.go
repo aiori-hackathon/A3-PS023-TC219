@@ -188,24 +188,62 @@ function showToast(msg, isError) {
   setTimeout(function() { t.style.display = 'none'; }, 3500);
 }
 
+function copyText(text, successMsg) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      showToast(successMsg || ('Copied: ' + text), false);
+    }).catch(function() {
+      if (fallbackCopy(text)) {
+        showToast(successMsg || ('Copied: ' + text), false);
+      } else {
+        prompt('Copy command to clipboard: Ctrl+C, Enter', text);
+      }
+    });
+    return;
+  }
+  if (fallbackCopy(text)) {
+    showToast(successMsg || ('Copied: ' + text), false);
+  } else {
+    prompt('Copy command to clipboard: Ctrl+C, Enter', text);
+  }
+}
+
+function fallbackCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.top = '0';
+  ta.style.left = '0';
+  ta.style.width = '2em';
+  ta.style.height = '2em';
+  ta.style.padding = '0';
+  ta.style.border = 'none';
+  ta.style.outline = 'none';
+  ta.style.boxShadow = 'none';
+  ta.style.background = 'transparent';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  var successful = false;
+  try {
+    successful = document.execCommand('copy');
+  } catch (err) {
+    successful = false;
+  }
+  document.body.removeChild(ta);
+  return successful;
+}
+
 function copySSH(ip, port) {
   var host = (ip && ip !== '127.0.0.1' && ip !== '0.0.0.0') ? ip : ((window.location && window.location.hostname) ? window.location.hostname : '127.0.0.1');
   var p = port && port !== 22 ? ' -p ' + port : '';
   var cmd = 'ssh -o StrictHostKeyChecking=no minix@' + host + p;
-  navigator.clipboard.writeText(cmd).then(function() {
-    showToast('Copied: ' + cmd, false);
-  }).catch(function() {
-    showToast('Connect via: ' + cmd, false);
-  });
+  copyText(cmd, 'Copied: ' + cmd);
 }
 
 function copyConsole(sock) {
   var cmd = 'nc -U ' + sock;
-  navigator.clipboard.writeText(cmd).then(function() {
-    showToast('Copied console command: ' + cmd, false);
-  }).catch(function() {
-    showToast('Connect via: ' + cmd, false);
-  });
+  copyText(cmd, 'Copied console command: ' + cmd);
 }
 
 var cachedVMs = [];
@@ -381,10 +419,15 @@ function renderVMs(vms) {
       '<td><span class="os-badge">' + escapeHtml(os) + '</span></td>' +
       '<td>' +
       (port > 0 ? 
-        '<span class="ip-tag" onclick="copySSH(\'' + ip + '\', ' + port + ')" title="Click to copy: ' + escapeHtml(sshCmd) + '"><strong>' + escapeHtml(connText) + '</strong> [SSH]</span>' :
+        '<div style="display:flex;flex-direction:column;gap:5px;">' +
+        '  <span class="ip-tag" onclick="copySSH(\'' + ip + '\', ' + port + ')" title="Click to copy: ' + escapeHtml(sshCmd) + '" style="cursor:pointer;">' +
+        '    <strong>' + escapeHtml(connText) + '</strong> <span style="background:rgba(56,189,248,0.25);padding:1px 5px;border-radius:4px;color:#38bdf8;font-size:11px;">📋 Copy SSH</span>' +
+        '  </span>' +
+        '  <input type="text" readonly value="' + escapeHtml(sshCmd) + '" onclick="this.select();copySSH(\'' + ip + '\', ' + port + ');" style="font-family:monospace;font-size:11px;background:#0f172a;border:1px solid #334155;color:#94a3b8;border-radius:4px;padding:3px 6px;width:100%;max-width:260px;cursor:pointer;" title="Click to select & copy command">' +
+        '</div>' :
         '<span style="font-size:12px;color:var(--text-muted);">' + escapeHtml(connText) + '</span>'
       ) +
-      (vm.serial_socket ? '<br><span class="ip-tag" style="margin-top:4px;color:#a3e635;font-size:11px;" onclick="copyConsole(\'' + escapeHtml(vm.serial_socket) + '\')" title="Click to copy serial console command">Socket: nc -U</span>' : '') +
+      (vm.serial_socket ? '<br><span class="ip-tag" style="margin-top:4px;color:#a3e635;font-size:11px;cursor:pointer;" onclick="copyConsole(\'' + escapeHtml(vm.serial_socket) + '\')" title="Click to copy serial console command">Socket: nc -U</span>' : '') +
       '</td>' +
       '<td><span class="badge state-' + state + '">' + state + '</span>' +
       (vm.error_message ? '<br><small style="color: #f87171; font-size: 10px;">' + escapeHtml(vm.error_message) + '</small>' : '') +
