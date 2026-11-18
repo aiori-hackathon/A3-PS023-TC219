@@ -189,7 +189,7 @@ function showToast(msg, isError) {
 }
 
 function copySSH(ip, port) {
-  var host = (window.location && window.location.hostname) ? window.location.hostname : (ip || '127.0.0.1');
+  var host = (ip && ip !== '127.0.0.1' && ip !== '0.0.0.0') ? ip : ((window.location && window.location.hostname) ? window.location.hostname : '127.0.0.1');
   var p = port && port !== 22 ? ' -p ' + port : '';
   var cmd = 'ssh -o StrictHostKeyChecking=no minix@' + host + p;
   navigator.clipboard.writeText(cmd).then(function() {
@@ -320,7 +320,7 @@ function renderVMs(vms) {
     var state = vm.state;
     var ip = vm.ip_address || '127.0.0.1';
     var port = vm.ssh_port || 0;
-    var host = (window.location && window.location.hostname) ? window.location.hostname : (ip || '127.0.0.1');
+    var host = (ip && ip !== '127.0.0.1' && ip !== '0.0.0.0') ? ip : ((window.location && window.location.hostname) ? window.location.hostname : '127.0.0.1');
     var connText = port > 0 ? (host + ':' + port) : (state === 'RUNNING' ? 'Starting SSH...' : 'Stopped');
     var sshCmd = 'ssh -o StrictHostKeyChecking=no minix@' + host + (port ? ' -p ' + port : '');
     var os = vm.os || 'MINIX 3';

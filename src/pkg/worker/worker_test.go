@@ -265,8 +265,15 @@ func TestRealCloudHypervisorLifecycle(t *testing.T) {
 	if _, err := exec.LookPath("cloud-hypervisor"); err != nil {
 		t.Skip("cloud-hypervisor binary not found, skipping real hypervisor test")
 	}
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		t.Skip("/dev/kvm not found, skipping real hypervisor test")
+	if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err != nil {
+		t.Skipf("/dev/kvm not accessible for read/write (%v), skipping real hypervisor test", err)
+	} else {
+		_ = f.Close()
+	}
+	if _, err := exec.LookPath("systemd-run"); err == nil {
+		if err := exec.Command("systemd-run", "--user", "--scope", "true").Run(); err != nil {
+			t.Skip("systemd user bus not available in this environment, skipping real hypervisor test")
+		}
 	}
 
 	tempDir, err := os.MkdirTemp("", "ch-test-*")

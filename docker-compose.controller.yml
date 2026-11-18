@@ -1,0 +1,27 @@
+services:
+  controller:
+    build:
+      context: .
+      dockerfile: Dockerfile.controller
+    image: vm-controller:latest
+    container_name: vm-controller
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - CONTROLLER_ADDR=0.0.0.0:8080
+      - CONTROLLER_DATA_DIR=/data
+      - CONTROLLER_TOKEN=${CONTROLLER_TOKEN:-secret-controller-key}
+      - WORKER_1_ID=worker-1
+      - WORKER_1_URL=${WORKER_1_URL:-http://127.0.0.1:8081}
+      - WORKER_1_TOKEN=${WORKER_TOKEN:-secret-worker-key}
+      - WORKER_2_ID=worker-2
+      - WORKER_2_URL=${WORKER_2_URL:-http://127.0.0.1:8082}
+      - WORKER_2_TOKEN=${WORKER_TOKEN:-secret-worker-key}
+    volumes:
+      - /data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s

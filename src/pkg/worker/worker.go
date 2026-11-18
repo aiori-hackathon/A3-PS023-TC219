@@ -22,6 +22,7 @@ import (
 type Config struct {
 	ID               string
 	Token            string
+	HostIP           string // Public or external IP reported for VM SSH access (default: 127.0.0.1)
 	TotalMemoryMB    int
 	ReservedMemoryMB int
 	Driver           HypervisorDriver
@@ -412,8 +413,12 @@ func (w *Worker) BootVM(ctx context.Context, vmID string) error {
 				if err == nil {
 					w.sshBridges[vm.ID] = bridge
 					vm.SSHPort = port
-					vm.IPAddress = "127.0.0.1"
-					log.Printf("[Worker %s] Started SSH bridge for VM %s on 127.0.0.1:%d", w.cfg.ID, vm.ID, port)
+					reportIP := "127.0.0.1"
+					if w.cfg.HostIP != "" {
+						reportIP = w.cfg.HostIP
+					}
+					vm.IPAddress = reportIP
+					log.Printf("[Worker %s] Started SSH bridge for VM %s on %s:%d", w.cfg.ID, vm.ID, reportIP, port)
 				} else {
 					log.Printf("[Worker %s] Failed to start SSH bridge for VM %s: %v", w.cfg.ID, vm.ID, err)
 					w.releasePortLocked(port)

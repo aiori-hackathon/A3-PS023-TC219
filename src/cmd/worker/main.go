@@ -27,6 +27,7 @@ func main() {
 		chBin        = flag.String("ch-bin", config.EnvString("CH_BIN", "cloud-hypervisor"), "Path to cloud-hypervisor binary")
 		kernelPath   = flag.String("kernel", config.EnvString("KERNEL_PATH", ""), "Path to guest kernel")
 		baseDiskPath = flag.String("base-disk", config.EnvString("BASE_DISK_PATH", ""), "Path to base rootfs disk image")
+		hostIP       = flag.String("host-ip", config.EnvString("HOST_IP", ""), "Public or reachable IP/DNS for VM SSH access")
 	)
 	flag.Parse()
 
@@ -55,6 +56,7 @@ func main() {
 	w := worker.NewWorker(worker.Config{
 		ID:               *id,
 		Token:            *token,
+		HostIP:           *hostIP,
 		TotalMemoryMB:    *memMB,
 		ReservedMemoryMB: 512,
 		Driver:           driver,

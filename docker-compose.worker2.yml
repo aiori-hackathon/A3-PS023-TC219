@@ -1,0 +1,28 @@
+services:
+  worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: vm-worker:latest
+    container_name: vm-worker-2
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    environment:
+      - WORKER_ID=worker-2
+      - WORKER_ADDR=0.0.0.0:8082
+      - WORKER_TOKEN=${WORKER_TOKEN:-secret-worker-key}
+      - DATA_DIR=/data
+      - HOST_IP=${HOST_IP:-127.0.0.1}
+      - TOTAL_MEMORY_MB=${TOTAL_MEMORY_MB:-14336}
+      - HYPERVISOR_DRIVER=${HYPERVISOR_DRIVER:-auto}
+      - CH_BIN=/usr/local/bin/cloud-hypervisor
+    volumes:
+      - /data:/data
+      - /dev/kvm:/dev/kvm
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s

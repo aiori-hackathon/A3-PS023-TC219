@@ -1,0 +1,475 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Deploy Distributed Three-Node Cloud Hypervisor Cluster (1 Controller + 2 Workers) on Amazon Linux 2023'
+
+Parameters:
+  WorkerInstanceType:
+    Type: String
+    Default: 'c7i-flex.2xlarge'
+    AllowedValues:
+      - 'c7i-flex.2xlarge'
+      - 'c7i.metal'
+      - 'c6i.metal'
+      - 'c5.metal'
+      - 'm6i.metal'
+      - 't3.large'
+      - 't3.xlarge'
+    Description: 'EC2 Instance Type for Worker-1 and Worker-2 (c7i-flex.2xlarge: 8 vCPUs, 16 GB RAM)'
+
+  ControllerInstanceType:
+    Type: String
+    Default: 't3.medium'
+    AllowedValues:
+      - 't3.small'
+      - 't3.medium'
+      - 't3.large'
+      - 'c7i-flex.large'
+    Description: 'EC2 Instance Type for Central Controller (Lightweight Go HTTP Router & DB)'
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access'
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: 'VPC where the cluster nodes should be launched'
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: 'Public Subnet within the selected VPC'
+
+  IamInstanceProfile:
+    Type: String
+    Default: ''
+    Description: 'Optional: Existing IAM Instance Profile / Role name with S3 read access'
+
+  S3BucketName:
+    Type: String
+    Default: ''
+    Description: 'Optional: S3 bucket name containing your Linux ISOs'
+
+  LatestAL2023Ami:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
+    Description: 'Official Amazon Linux 2023 (AL2023) AMI resolved dynamically via AWS SSM'
+
+Conditions:
+  HasIamProfile: !Not [!Equals [!Ref IamInstanceProfile, '']]
+
+Resources:
+  # -------------------------------------------------------------
+  # Security Groups
+  # -------------------------------------------------------------
+  ControllerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security Group for Central VM Controller'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: 'Host SSH Admin'
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+          Description: 'Web Dashboard and Management API'
+      Tags:
+        - Key: Name
+          Value: 'vm-controller-sg'
+
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security Group for Worker Nodes (Internal API + Public VM SSH)'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: 'Host SSH Admin'
+        - IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          SourceSecurityGroupId: !Ref ControllerSecurityGroup
+          Description: 'Worker 1 REST API from Controller'
+        - IpProtocol: tcp
+          FromPort: 8082
+          ToPort: 8082
+          SourceSecurityGroupId: !Ref ControllerSecurityGroup
+          Description: 'Worker 2 REST API from Controller'
+        - IpProtocol: tcp
+          FromPort: 2201
+          ToPort: 2220
+          CidrIp: 0.0.0.0/0
+          Description: 'Worker 1 Guest VM SSH Bridge Range'
+        - IpProtocol: tcp
+          FromPort: 2301
+          ToPort: 2320
+          CidrIp: 0.0.0.0/0
+          Description: 'Worker 2 Guest VM SSH Bridge Range'
+      Tags:
+        - Key: Name
+          Value: 'vm-worker-sg'
+
+  # -------------------------------------------------------------
+  # Elastic IPs
+  # -------------------------------------------------------------
+  ControllerEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Tags:
+        - Key: Name
+          Value: 'vm-controller-eip'
+
+  Worker1EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Tags:
+        - Key: Name
+          Value: 'vm-worker-1-eip'
+
+  Worker2EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Tags:
+        - Key: Name
+          Value: 'vm-worker-2-eip'
+
+  # -------------------------------------------------------------
+  # Worker 1 EC2 Instance (c7i-flex.2xlarge on AL2023)
+  # -------------------------------------------------------------
+  Worker1Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref WorkerInstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref SubnetId
+      ImageId: !Ref LatestAL2023Ami
+      SecurityGroupIds:
+        - !Ref WorkerSecurityGroup
+      IamInstanceProfile: !If [HasIamProfile, !Ref IamInstanceProfile, !Ref 'AWS::NoValue']
+      BlockDeviceMappings:
+        - DeviceName: '/dev/xvda'
+          Ebs:
+            VolumeSize: 60
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: 'vm-worker-1'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          exec > >(tee -a /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
+          echo "=== Initializing Worker 1 on Amazon Linux 2023 ==="
+
+          dnf update -y
+          dnf install -y docker git jq
+
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -sSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+
+          if [ -e /dev/kvm ]; then
+              chmod 666 /dev/kvm || true
+          fi
+
+          REPO_DIR="/opt/vm-controller"
+          if [ -n "${S3BucketName}" ]; then
+              echo "Downloading from S3 bucket: ${S3BucketName}..."
+              mkdir -p /opt/vm-data
+              aws s3 sync "s3://${S3BucketName}" /opt/vm-data/ 2>/dev/null || true
+              aws s3 cp "s3://${S3BucketName}/vm-controller-src.tar.gz" /tmp/src.tar.gz 2>/dev/null && {
+                  mkdir -p "$REPO_DIR"
+                  tar -xzf /tmp/src.tar.gz -C "$REPO_DIR"
+              } || true
+          fi
+
+          if [ ! -d "$REPO_DIR" ]; then
+              git clone https://github.com/aiori-hackathon/A3-PS023-TC219.git "$REPO_DIR" || true
+          fi
+
+          cd "$REPO_DIR"
+          mkdir -p /data
+
+          TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+          TOTAL_MEM_MB=$((TOTAL_MEM_KB / 1024))
+          USABLE_MEM=$((TOTAL_MEM_MB - 1536))
+          if [ "$USABLE_MEM" -lt 4096 ]; then USABLE_MEM=4096; fi
+
+          cat <<ENV > .env
+          HOST_IP=${Worker1EIP}
+          TOTAL_MEMORY_MB=$USABLE_MEM
+          WORKER_ADDR=0.0.0.0:8081
+          WORKER_TOKEN=secret-worker-key
+          ENV
+
+          docker compose -f docker-compose.worker1.yml build
+          docker compose -f docker-compose.worker1.yml up -d
+
+          cat <<SVC > /etc/systemd/system/vm-worker.service
+          [Unit]
+          Description=Worker 1 Agent
+          Requires=docker.service
+          After=docker.service network-online.target
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory=$REPO_DIR
+          ExecStart=/usr/local/bin/docker-compose -f docker-compose.worker1.yml up -d
+          ExecStop=/usr/local/bin/docker-compose -f docker-compose.worker1.yml down
+          TimeoutStartSec=180
+
+          [Install]
+          WantedBy=multi-user.target
+          SVC
+
+          systemctl daemon-reload
+          systemctl enable vm-worker.service
+          echo "=== Worker 1 Started on Port 8081 ==="
+
+  Worker1EIPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref Worker1Instance
+      EIP: !Ref Worker1EIP
+
+  # -------------------------------------------------------------
+  # Worker 2 EC2 Instance (c7i-flex.2xlarge on AL2023)
+  # -------------------------------------------------------------
+  Worker2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref WorkerInstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref SubnetId
+      ImageId: !Ref LatestAL2023Ami
+      SecurityGroupIds:
+        - !Ref WorkerSecurityGroup
+      IamInstanceProfile: !If [HasIamProfile, !Ref IamInstanceProfile, !Ref 'AWS::NoValue']
+      BlockDeviceMappings:
+        - DeviceName: '/dev/xvda'
+          Ebs:
+            VolumeSize: 60
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: 'vm-worker-2'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          exec > >(tee -a /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
+          echo "=== Initializing Worker 2 on Amazon Linux 2023 ==="
+
+          dnf update -y
+          dnf install -y docker git jq
+
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -sSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+
+          if [ -e /dev/kvm ]; then
+              chmod 666 /dev/kvm || true
+          fi
+
+          REPO_DIR="/opt/vm-controller"
+          if [ -n "${S3BucketName}" ]; then
+              echo "Downloading from S3 bucket: ${S3BucketName}..."
+              mkdir -p /opt/vm-data
+              aws s3 sync "s3://${S3BucketName}" /opt/vm-data/ 2>/dev/null || true
+              aws s3 cp "s3://${S3BucketName}/vm-controller-src.tar.gz" /tmp/src.tar.gz 2>/dev/null && {
+                  mkdir -p "$REPO_DIR"
+                  tar -xzf /tmp/src.tar.gz -C "$REPO_DIR"
+              } || true
+          fi
+
+          if [ ! -d "$REPO_DIR" ]; then
+              git clone https://github.com/aiori-hackathon/A3-PS023-TC219.git "$REPO_DIR" || true
+          fi
+
+          cd "$REPO_DIR"
+          mkdir -p /data
+
+          TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+          TOTAL_MEM_MB=$((TOTAL_MEM_KB / 1024))
+          USABLE_MEM=$((TOTAL_MEM_MB - 1536))
+          if [ "$USABLE_MEM" -lt 4096 ]; then USABLE_MEM=4096; fi
+
+          cat <<ENV > .env
+          HOST_IP=${Worker2EIP}
+          TOTAL_MEMORY_MB=$USABLE_MEM
+          WORKER_ADDR=0.0.0.0:8082
+          WORKER_TOKEN=secret-worker-key
+          ENV
+
+          docker compose -f docker-compose.worker2.yml build
+          docker compose -f docker-compose.worker2.yml up -d
+
+          cat <<SVC > /etc/systemd/system/vm-worker.service
+          [Unit]
+          Description=Worker 2 Agent
+          Requires=docker.service
+          After=docker.service network-online.target
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory=$REPO_DIR
+          ExecStart=/usr/local/bin/docker-compose -f docker-compose.worker2.yml up -d
+          ExecStop=/usr/local/bin/docker-compose -f docker-compose.worker2.yml down
+          TimeoutStartSec=180
+
+          [Install]
+          WantedBy=multi-user.target
+          SVC
+
+          systemctl daemon-reload
+          systemctl enable vm-worker.service
+          echo "=== Worker 2 Started on Port 8082 ==="
+
+  Worker2EIPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref Worker2Instance
+      EIP: !Ref Worker2EIP
+
+  # -------------------------------------------------------------
+  # Controller EC2 Instance (t3.medium on AL2023)
+  # -------------------------------------------------------------
+  ControllerInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - Worker1Instance
+      - Worker2Instance
+    Properties:
+      InstanceType: !Ref ControllerInstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref SubnetId
+      ImageId: !Ref LatestAL2023Ami
+      SecurityGroupIds:
+        - !Ref ControllerSecurityGroup
+      IamInstanceProfile: !If [HasIamProfile, !Ref IamInstanceProfile, !Ref 'AWS::NoValue']
+      BlockDeviceMappings:
+        - DeviceName: '/dev/xvda'
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: 'vm-controller'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          exec > >(tee -a /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
+          echo "=== Initializing Controller on Amazon Linux 2023 ==="
+
+          dnf update -y
+          dnf install -y docker git jq
+
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -sSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+
+          REPO_DIR="/opt/vm-controller"
+          if [ -n "${S3BucketName}" ]; then
+              aws s3 cp "s3://${S3BucketName}/vm-controller-src.tar.gz" /tmp/src.tar.gz 2>/dev/null && {
+                  mkdir -p "$REPO_DIR"
+                  tar -xzf /tmp/src.tar.gz -C "$REPO_DIR"
+              } || true
+          fi
+
+          if [ ! -d "$REPO_DIR" ]; then
+              git clone https://github.com/aiori-hackathon/A3-PS023-TC219.git "$REPO_DIR" || true
+          fi
+
+          cd "$REPO_DIR"
+          mkdir -p /data
+
+          cat <<ENV > .env
+          CONTROLLER_ADDR=0.0.0.0:8080
+          CONTROLLER_DATA_DIR=/data
+          CONTROLLER_TOKEN=secret-controller-key
+          WORKER_1_ID=worker-1
+          WORKER_1_URL=http://${Worker1Instance.PrivateIp}:8081
+          WORKER_1_TOKEN=secret-worker-key
+          WORKER_2_ID=worker-2
+          WORKER_2_URL=http://${Worker2Instance.PrivateIp}:8082
+          WORKER_2_TOKEN=secret-worker-key
+          ENV
+
+          docker compose -f docker-compose.controller.yml build
+          docker compose -f docker-compose.controller.yml up -d
+
+          cat <<SVC > /etc/systemd/system/vm-controller.service
+          [Unit]
+          Description=Central VM Controller
+          Requires=docker.service
+          After=docker.service network-online.target
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory=$REPO_DIR
+          ExecStart=/usr/local/bin/docker-compose -f docker-compose.controller.yml up -d
+          ExecStop=/usr/local/bin/docker-compose -f docker-compose.controller.yml down
+          TimeoutStartSec=180
+
+          [Install]
+          WantedBy=multi-user.target
+          SVC
+
+          systemctl daemon-reload
+          systemctl enable vm-controller.service
+          echo "=== Controller Started on Port 8080 ==="
+
+  ControllerEIPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref ControllerInstance
+      EIP: !Ref ControllerEIP
+
+Outputs:
+  WebDashboardURL:
+    Description: 'Web UI Dashboard URL (Port 8080)'
+    Value: !Sub 'http://${ControllerEIP}:8080'
+
+  ControllerHostSSH:
+    Description: 'SSH into Controller EC2 Instance'
+    Value: !Sub 'ssh -i ${KeyName}.pem ec2-user@${ControllerEIP}'
+
+  Worker1HostSSH:
+    Description: 'SSH into Worker-1 EC2 Instance (c7i-flex.2xlarge)'
+    Value: !Sub 'ssh -i ${KeyName}.pem ec2-user@${Worker1EIP}'
+
+  Worker2HostSSH:
+    Description: 'SSH into Worker-2 EC2 Instance (c7i-flex.2xlarge)'
+    Value: !Sub 'ssh -i ${KeyName}.pem ec2-user@${Worker2EIP}'
+
+  Worker1GuestVMSSH:
+    Description: 'SSH command to connect to VMs placed on Worker-1'
+    Value: !Sub 'ssh -o StrictHostKeyChecking=no minix@${Worker1EIP} -p 2201'
+
+  Worker2GuestVMSSH:
+    Description: 'SSH command to connect to VMs placed on Worker-2'
+    Value: !Sub 'ssh -o StrictHostKeyChecking=no minix@${Worker2EIP} -p 2301'

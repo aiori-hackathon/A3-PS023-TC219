@@ -431,6 +431,30 @@ curl -s -X DELETE http://localhost:8080/vms/vm-1 \
 
 ---
 
+## ☁️ AWS EC2 Deployment Guide
+
+The system can be deployed on AWS EC2 in under 2 minutes:
+
+### 1. Automated Launch via EC2 User Data (Zero-Touch)
+When launching an Ubuntu 24.04 or 22.04 LTS instance, paste [`scripts/ec2-user-data.sh`](scripts/ec2-user-data.sh) into **Advanced details -> User Data**. It automatically installs Docker, configures firewall rules, pulls the repo, detects `/dev/kvm`, builds images, and sets up a `systemd` auto-restart service.
+
+### 2. Manual Setup on an Existing EC2 Instance
+```bash
+git clone https://github.com/aiori-hackathon/A3-PS023-TC219.git
+cd A3-PS023-TC219
+sudo ./scripts/setup-ec2.sh
+```
+
+### 3. AWS Security Group Rules
+| Port Range | Protocol | Purpose |
+|---|---|---|
+| `8080` | TCP | Web Dashboard & REST API |
+| `2201-2220` | TCP | Worker-1 VM SSH console bridge |
+| `2301-2320` | TCP | Worker-2 VM SSH console bridge |
+| `22` | TCP | EC2 Host SSH administration |
+
+---
+
 ## 🗓️ Deployment Timeline & Milestones
 
 | Milestone | Status | Description |
