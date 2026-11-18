@@ -148,12 +148,15 @@ func (b *SSHBridge) handleConn(nConn net.Conn, config *ssh.ServerConfig) {
 			return
 		}
 
-		go b.handleSession(channel, requests)
+		go b.handleSession(sConn, channel, requests)
 	}
 }
 
-func (b *SSHBridge) handleSession(channel ssh.Channel, requests <-chan *ssh.Request) {
-	defer channel.Close()
+func (b *SSHBridge) handleSession(sConn *ssh.ServerConn, channel ssh.Channel, requests <-chan *ssh.Request) {
+	defer func() {
+		_ = channel.Close()
+		_ = sConn.Close()
+	}()
 
 	for req := range requests {
 		switch req.Type {
@@ -162,7 +165,7 @@ func (b *SSHBridge) handleSession(channel ssh.Channel, requests <-chan *ssh.Requ
 		case "shell", "exec":
 			_ = req.Reply(true, nil)
 			go ssh.DiscardRequests(requests)
-			b.bridgeToSerial(channel)
+			b.bridgeToSerial(sConn, channel)
 			return
 		default:
 			_ = req.Reply(false, nil)
@@ -170,7 +173,7 @@ func (b *SSHBridge) handleSession(channel ssh.Channel, requests <-chan *ssh.Requ
 	}
 }
 
-func (b *SSHBridge) bridgeToSerial(channel ssh.Channel) {
+func (b *SSHBridge) bridgeToSerial(sConn *ssh.ServerConn, channel ssh.Channel) {
 	sockConn, err := net.Dial("unix", b.sockPath)
 	if err != nil {
 		_, _ = channel.Write([]byte(fmt.Sprintf("\r\n[SSH Bridge] Error connecting to VM serial console: %v\r\n", err)))
@@ -186,18 +189,20 @@ func (b *SSHBridge) bridgeToSerial(channel ssh.Channel) {
 	go func() {
 		_, _ = io.Copy(channel, sockConn)
 		_ = channel.Close()
+		_ = sConn.Close()
 		done <- struct{}{}
 	}()
 
 	go func() {
 		defer func() {
 			_ = sockConn.Close()
+			_ = channel.Close()
+			_ = sConn.Close()
 			done <- struct{}{}
 		}()
 
 		buf := make([]byte, 1024)
 		var lineBuf []byte
-		atLineStart := true
 
 		for {
 			n, err := channel.Read(buf)
@@ -208,28 +213,27 @@ func (b *SSHBridge) bridgeToSerial(channel ssh.Channel) {
 				for i := 0; i < len(data); i++ {
 					ch := data[i]
 					if ch == 0x04 { // Ctrl+D (EOT)
-						if atLineStart || len(lineBuf) == 0 {
-							shouldExit = true
-							break
-						}
+						shouldExit = true
+						break
 					} else if ch == '\r' || ch == '\n' {
 						cmd := strings.TrimSpace(string(lineBuf))
-						if cmd == "exit" || cmd == "logout" || cmd == "quit" {
+						if cmd == "exit" || cmd == "logout" || cmd == "quit" || cmd == "~." || cmd == "~" {
 							shouldExit = true
 							break
 						}
 						lineBuf = lineBuf[:0]
-						atLineStart = true
 					} else if ch == 0x7f || ch == 0x08 { // Backspace
 						if len(lineBuf) > 0 {
 							lineBuf = lineBuf[:len(lineBuf)-1]
 						}
 					} else if ch == 0x03 { // Ctrl+C
 						lineBuf = lineBuf[:0]
-						atLineStart = true
 					} else if ch >= 0x20 && ch <= 0x7e { // printable ASCII
 						lineBuf = append(lineBuf, ch)
-						atLineStart = false
+						if strings.HasSuffix(string(lineBuf), "~.") {
+							shouldExit = true
+							break
+						}
 					}
 				}
 
@@ -239,9 +243,11 @@ func (b *SSHBridge) bridgeToSerial(channel ssh.Channel) {
 				}
 
 				if shouldExit {
-					time.Sleep(100 * time.Millisecond)
-					_, _ = channel.Write([]byte("\r\nConnection to VM console closed.\r\n"))
+					time.Sleep(50 * time.Millisecond)
+					_, _ = channel.Write([]byte("\r\n[SSH Bridge] Connection closed.\r\n"))
+					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
 					_ = channel.Close()
+					_ = sConn.Close()
 					return
 				}
 			}
