@@ -237,7 +237,7 @@ function fallbackCopy(text) {
 function copySSH(ip, port) {
   var host = (ip && ip !== '127.0.0.1' && ip !== '0.0.0.0') ? ip : ((window.location && window.location.hostname) ? window.location.hostname : '127.0.0.1');
   var p = port && port !== 22 ? ' -p ' + port : '';
-  var cmd = 'ssh -o StrictHostKeyChecking=no minix@' + host + p;
+  var cmd = 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null minix@' + host + p;
   copyText(cmd, 'Copied: ' + cmd);
 }
 
@@ -360,7 +360,7 @@ function renderVMs(vms) {
     var port = vm.ssh_port || 0;
     var host = (ip && ip !== '127.0.0.1' && ip !== '0.0.0.0') ? ip : ((window.location && window.location.hostname) ? window.location.hostname : '127.0.0.1');
     var connText = port > 0 ? (host + ':' + port) : (state === 'RUNNING' ? 'Starting SSH...' : 'Stopped');
-    var sshCmd = 'ssh -o StrictHostKeyChecking=no minix@' + host + (port ? ' -p ' + port : '');
+    var sshCmd = 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null minix@' + host + (port ? ' -p ' + port : '');
     var os = vm.os || 'MINIX 3';
 
     var u = vm.resource_usage || {};

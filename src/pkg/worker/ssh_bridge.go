@@ -3,9 +3,12 @@ package worker
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -24,12 +27,35 @@ type SSHBridge struct {
 	closeOnce sync.Once
 }
 
-func generateHostKey() (ssh.Signer, error) {
+func loadOrGenerateHostKey(keyPath string) (ssh.Signer, error) {
+	if keyPath != "" {
+		if data, err := os.ReadFile(keyPath); err == nil {
+			signer, err := ssh.ParsePrivateKey(data)
+			if err == nil {
+				return signer, nil
+			}
+		}
+	}
+
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
 	}
+
+	if keyPath != "" {
+		keyBytes := x509.MarshalPKCS1PrivateKey(key)
+		pemBlock := &pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: keyBytes,
+		}
+		_ = os.WriteFile(keyPath, pem.EncodeToMemory(pemBlock), 0600)
+	}
+
 	return ssh.NewSignerFromKey(key)
+}
+
+func generateHostKey() (ssh.Signer, error) {
+	return loadOrGenerateHostKey("")
 }
 
 // StartSSHBridge launches a local SSH server listening on 0.0.0.0:<port>

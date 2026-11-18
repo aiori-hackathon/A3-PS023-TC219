@@ -67,8 +67,11 @@ func detectHostKernel() string {
 
 func ensureDefaultInitramfs(baseDir string) string {
 	initrdPath := filepath.Join(baseDir, "guest-initramfs.cpio.gz")
+	versionFile := filepath.Join(baseDir, ".initramfs.v2")
 	if _, err := os.Stat(initrdPath); err == nil {
-		return initrdPath
+		if _, err := os.Stat(versionFile); err == nil {
+			return initrdPath
+		}
 	}
 	busyboxPath, err := exec.LookPath("busybox")
 	if err != nil {
@@ -120,6 +123,7 @@ done
 
 	cmd := exec.Command("sh", "-c", fmt.Sprintf("cd %s && find . | cpio -o -H newc | gzip > %s", buildDir, initrdPath))
 	if err := cmd.Run(); err == nil {
+		_ = os.WriteFile(versionFile, []byte("v2"), 0644)
 		return initrdPath
 	}
 	return ""

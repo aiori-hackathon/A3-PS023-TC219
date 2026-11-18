@@ -73,7 +73,8 @@ func NewWorker(cfg Config) *Worker {
 		}
 	}
 
-	signer, _ := generateHostKey()
+	keyPath := filepath.Join(cfg.DataDir, "ssh_host_key")
+	signer, _ := loadOrGenerateHostKey(keyPath)
 	w := &Worker{
 		cfg:              cfg,
 		store:            s,
