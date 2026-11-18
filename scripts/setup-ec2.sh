@@ -35,6 +35,8 @@ if id "$TARGET_USER" &>/dev/null; then
 fi
 
 # 2. Check KVM
+modprobe kvm 2>/dev/null || true
+modprobe kvm_intel 2>/dev/null || true
 if [ -e /dev/kvm ]; then
     echo "Hardware /dev/kvm found. Setting permissions..."
     chmod 666 /dev/kvm

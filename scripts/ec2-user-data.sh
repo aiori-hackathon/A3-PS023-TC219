@@ -46,6 +46,8 @@ if id "ubuntu" &>/dev/null; then
 fi
 
 # 3. Check for KVM hardware acceleration (/dev/kvm)
+modprobe kvm 2>/dev/null || true
+modprobe kvm_intel 2>/dev/null || true
 HAS_KVM=false
 if [ -e /dev/kvm ]; then
     echo "--> Hardware KVM detected at /dev/kvm. Configuring permissions..."

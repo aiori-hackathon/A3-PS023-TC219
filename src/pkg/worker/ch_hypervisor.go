@@ -85,15 +85,24 @@ func ensureDefaultInitramfs(baseDir string) string {
 	_ = os.MkdirAll(filepath.Join(buildDir, "proc"), 0755)
 	_ = os.MkdirAll(filepath.Join(buildDir, "sys"), 0755)
 	_ = os.MkdirAll(filepath.Join(buildDir, "dev"), 0755)
+	_ = os.MkdirAll(filepath.Join(buildDir, "lib"), 0755)
 
 	_ = copyFile(busyboxPath, filepath.Join(buildDir, "bin", "busybox"))
 	_ = os.Chmod(filepath.Join(buildDir, "bin", "busybox"), 0755)
 
+	for _, lib := range []string{"/lib/ld-musl-x86_64.so.1", "/lib/libc.musl-x86_64.so.1"} {
+		if f, err := os.Open(lib); err == nil {
+			_ = f.Close()
+			_ = copyFile(lib, filepath.Join(buildDir, "lib", filepath.Base(lib)))
+			_ = os.Chmod(filepath.Join(buildDir, "lib", filepath.Base(lib)), 0755)
+		}
+	}
+
 	initScript := `#!/bin/busybox sh
 /bin/busybox --install -s /bin
-mount -t devtmpfs devtmpfs /dev
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sysfs /sys 2>/dev/null || true
 echo ""
 echo "=========================================================="
 echo " Welcome to MINIX 3 / Microkernel Guest VM"
@@ -101,7 +110,10 @@ echo " Node: Cloud Hypervisor on Linux KVM"
 echo " Interactive shell ready."
 echo "=========================================================="
 echo ""
-exec setsid cttyhack sh
+while true; do
+  /bin/busybox sh </dev/ttyS0 >/dev/ttyS0 2>&1 || /bin/busybox sh
+  sleep 1
+done
 `
 	_ = os.WriteFile(filepath.Join(buildDir, "init"), []byte(initScript), 0755)
 

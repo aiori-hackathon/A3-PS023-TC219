@@ -4,8 +4,9 @@ Description: 'Deploy Distributed Three-Node Cloud Hypervisor Cluster (1 Controll
 Parameters:
   WorkerInstanceType:
     Type: String
-    Default: 'c7i-flex.2xlarge'
+    Default: 'c7i-flex.xlarge'
     AllowedValues:
+      - 'c7i-flex.xlarge'
       - 'c7i-flex.2xlarge'
       - 'c7i.metal'
       - 'c6i.metal'
@@ -13,7 +14,7 @@ Parameters:
       - 'm6i.metal'
       - 't3.large'
       - 't3.xlarge'
-    Description: 'EC2 Instance Type for Worker-1 and Worker-2 (c7i-flex.2xlarge: 8 vCPUs, 16 GB RAM)'
+    Description: 'EC2 Instance Type for Worker-1 and Worker-2 (c7i-flex.xlarge: 4 vCPUs, 8 GB RAM)'
 
   ControllerInstanceType:
     Type: String
@@ -145,6 +146,8 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref WorkerInstanceType
+      CpuOptions:
+        NestedVirtualization: enabled
       KeyName: !Ref KeyName
       SubnetId: !Ref SubnetId
       ImageId: !Ref LatestAL2023Ami
@@ -178,6 +181,8 @@ Resources:
           systemctl enable --now docker
           usermod -aG docker ec2-user
 
+          modprobe kvm || true
+          modprobe kvm_intel || true
           if [ -e /dev/kvm ]; then
               chmod 666 /dev/kvm || true
           fi
@@ -250,6 +255,8 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref WorkerInstanceType
+      CpuOptions:
+        NestedVirtualization: enabled
       KeyName: !Ref KeyName
       SubnetId: !Ref SubnetId
       ImageId: !Ref LatestAL2023Ami
@@ -283,6 +290,8 @@ Resources:
           systemctl enable --now docker
           usermod -aG docker ec2-user
 
+          modprobe kvm || true
+          modprobe kvm_intel || true
           if [ -e /dev/kvm ]; then
               chmod 666 /dev/kvm || true
           fi
