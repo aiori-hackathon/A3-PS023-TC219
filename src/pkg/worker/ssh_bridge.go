@@ -180,6 +180,15 @@ func (b *SSHBridge) bridgeToSerial(sConn *ssh.ServerConn, channel ssh.Channel) {
 	}
 	defer sockConn.Close()
 
+	banner := "\r\n" +
+		"==========================================================\r\n" +
+		" Welcome to MINIX 3 / Microkernel Guest VM\r\n" +
+		" Node: Cloud Hypervisor on Linux KVM\r\n" +
+		" Interactive shell ready.\r\n" +
+		" Disconnect: press Ctrl+D\r\n" +
+		"==========================================================\r\n\r\n"
+	_, _ = channel.Write([]byte(banner))
+
 	// Send an initial newline to trigger prompt display if guest is waiting at prompt
 	_, _ = sockConn.Write([]byte("\r\n"))
 
