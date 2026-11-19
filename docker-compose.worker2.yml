@@ -21,6 +21,7 @@ services:
       - /data:/data
       - /dev/kvm:/dev/kvm
       - /boot:/boot:ro
+      - /lib/modules:/lib/modules:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
       interval: 5s

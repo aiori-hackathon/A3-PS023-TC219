@@ -67,7 +67,7 @@ func detectHostKernel() string {
 
 func ensureDefaultInitramfs(baseDir string) string {
 	initrdPath := filepath.Join(baseDir, "guest-initramfs.cpio.gz")
-	versionFile := filepath.Join(baseDir, ".initramfs.v4")
+	versionFile := filepath.Join(baseDir, ".initramfs.v6")
 	if _, err := os.Stat(initrdPath); err == nil {
 		if _, err := os.Stat(versionFile); err == nil {
 			return initrdPath
@@ -85,14 +85,19 @@ func ensureDefaultInitramfs(baseDir string) string {
 	defer os.RemoveAll(buildDir)
 
 	_ = os.MkdirAll(filepath.Join(buildDir, "bin"), 0755)
+	_ = os.MkdirAll(filepath.Join(buildDir, "sbin"), 0755)
 	_ = os.MkdirAll(filepath.Join(buildDir, "proc"), 0755)
 	_ = os.MkdirAll(filepath.Join(buildDir, "sys"), 0755)
 	_ = os.MkdirAll(filepath.Join(buildDir, "dev"), 0755)
-	_ = os.MkdirAll(filepath.Join(buildDir, "lib"), 0755)
+	_ = os.MkdirAll(filepath.Join(buildDir, "lib", "modules"), 0755)
+	_ = os.MkdirAll(filepath.Join(buildDir, "new_root"), 0755)
+	_ = os.MkdirAll(filepath.Join(buildDir, "etc"), 0755)
+	_ = os.MkdirAll(filepath.Join(buildDir, "tmp"), 1777)
 
 	_ = copyFile(busyboxPath, filepath.Join(buildDir, "bin", "busybox"))
 	_ = os.Chmod(filepath.Join(buildDir, "bin", "busybox"), 0755)
 
+	// Copy dynamic musl libraries if needed
 	for _, lib := range []string{"/lib/ld-musl-x86_64.so.1", "/lib/libc.musl-x86_64.so.1"} {
 		if f, err := os.Open(lib); err == nil {
 			_ = f.Close()
@@ -101,11 +106,120 @@ func ensureDefaultInitramfs(baseDir string) string {
 		}
 	}
 
+	// Copy mkfs.ext4 / mke2fs if available so initramfs can format disks inside VM
+	for _, binName := range []string{"mkfs.ext4", "mke2fs"} {
+		if p, err := exec.LookPath(binName); err == nil {
+			_ = copyFile(p, filepath.Join(buildDir, "sbin", binName))
+			_ = os.Chmod(filepath.Join(buildDir, "sbin", binName), 0755)
+		}
+	}
+
+	// Search and copy virtio & ext4 kernel modules
+	targetModules := []string{
+		"virtio", "virtio_ring", "virtio_pci_modern_dev", "virtio_pci_legacy_dev",
+		"virtio_pci", "virtio_blk", "crc16", "mbcache", "jbd2", "ext4",
+	}
+	moduleSearchPaths := []string{
+		"/lib/modules",
+		"/tmp/virtio_test",
+		"/usr/lib/modules",
+	}
+	for _, modName := range targetModules {
+		found := false
+		for _, searchPath := range moduleSearchPaths {
+			if found {
+				break
+			}
+			if _, err := os.Stat(searchPath); err != nil {
+				continue
+			}
+			_ = filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
+				if err != nil || info.IsDir() || found {
+					return nil
+				}
+				base := filepath.Base(path)
+				if base == modName+".ko" || base == modName+".ko.zst" || base == modName+".ko.xz" || base == modName+".ko.gz" {
+					dest := filepath.Join(buildDir, "lib", "modules", base)
+					if err := copyFile(path, dest); err == nil {
+						found = true
+						if strings.HasSuffix(base, ".zst") {
+							_ = exec.Command("zstd", "-d", "-q", "--rm", dest).Run()
+						}
+					}
+				}
+				return nil
+			})
+		}
+	}
+
 	initScript := `#!/bin/busybox sh
-/bin/busybox --install -s /bin
+/bin/busybox --install -s /bin 2>/dev/null || true
+
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
+
+# Insert storage modules
+for m in virtio virtio_ring virtio_pci_modern_dev virtio_pci_legacy_dev virtio_pci virtio_blk crc16 mbcache jbd2 ext4; do
+  if [ -f "/lib/modules/${m}.ko" ]; then
+    insmod "/lib/modules/${m}.ko" 2>/dev/null || true
+  fi
+done
+
+# Wait for /dev/vda to appear (up to 2 seconds)
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [ -b /dev/vda ] && break
+  sleep 0.1
+done
+
+if [ -b /dev/vda ]; then
+  mkdir -p /new_root
+  if ! mount -t ext4 /dev/vda /new_root 2>/dev/null; then
+    /sbin/mkfs.ext4 -F /dev/vda 2>/dev/null || /sbin/mke2fs -F /dev/vda 2>/dev/null || true
+    mount -t ext4 /dev/vda /new_root 2>/dev/null || true
+  fi
+
+  if grep -q "/new_root" /proc/mounts 2>/dev/null; then
+    # Populate base system on first boot
+    if [ ! -f /new_root/bin/busybox ]; then
+      mkdir -p /new_root/bin /new_root/sbin /new_root/dev /new_root/proc /new_root/sys /new_root/root /new_root/tmp /new_root/lib /new_root/etc
+      cp /bin/busybox /new_root/bin/busybox
+      /new_root/bin/busybox --install -s /new_root/bin 2>/dev/null || true
+      [ -d /lib ] && cp -a /lib/* /new_root/lib/ 2>/dev/null || true
+      chmod 1777 /new_root/tmp 2>/dev/null || true
+    fi
+
+    cat << 'INIT_EOF' > /new_root/init
+#!/bin/busybox sh
+/bin/busybox --install -s /bin 2>/dev/null || true
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sysfs /sys 2>/dev/null || true
+while true; do
+  /bin/busybox getty -n -l /bin/sh -L 115200 ttyS0 vt100 2>/dev/null || /bin/busybox sh </dev/ttyS0 >/dev/ttyS0 2>&1 || /bin/busybox sh
+  sleep 1
+done
+INIT_EOF
+    chmod +x /new_root/init
+
+    umount /sys 2>/dev/null || true
+    umount /proc 2>/dev/null || true
+    umount /dev 2>/dev/null || true
+
+    exec switch_root /new_root /bin/sh -c '
+      /bin/busybox --install -s /bin 2>/dev/null || true
+      mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+      mount -t proc proc /proc 2>/dev/null || true
+      mount -t sysfs sysfs /sys 2>/dev/null || true
+      while true; do
+        /bin/busybox getty -n -l /bin/sh -L 115200 ttyS0 vt100 2>/dev/null || /bin/busybox sh </dev/ttyS0 >/dev/ttyS0 2>&1 || /bin/busybox sh
+        sleep 1
+      done
+    '
+  fi
+fi
+
+# Fallback loop in case /dev/vda is missing
 while true; do
   /bin/busybox getty -n -l /bin/sh -L 115200 ttyS0 vt100 2>/dev/null || /bin/busybox sh </dev/ttyS0 >/dev/ttyS0 2>&1 || /bin/busybox sh
   sleep 1
@@ -115,7 +229,7 @@ done
 
 	cmd := exec.Command("sh", "-c", fmt.Sprintf("cd %s && find . | cpio -o -H newc | gzip > %s", buildDir, initrdPath))
 	if err := cmd.Run(); err == nil {
-		_ = os.WriteFile(versionFile, []byte("v4"), 0644)
+		_ = os.WriteFile(versionFile, []byte("v6"), 0644)
 		return initrdPath
 	}
 	return ""
@@ -160,6 +274,29 @@ func (d *CloudHypervisorDriver) socketClient(sockPath string) *http.Client {
 	}
 }
 
+// ensureFormattedDisk checks if the disk is already formatted as ext4, and if not, formats it.
+func ensureFormattedDisk(diskPath string) {
+	if _, err := os.Stat(diskPath); err != nil {
+		return
+	}
+	f, err := os.Open(diskPath)
+	if err == nil {
+		magic := make([]byte, 2)
+		_, _ = f.ReadAt(magic, 1080)
+		_ = f.Close()
+		if magic[0] == 0x53 && magic[1] == 0xef {
+			// Superblock magic matches ext4
+			return
+		}
+	}
+
+	if mkfs, err := exec.LookPath("mkfs.ext4"); err == nil {
+		_ = exec.Command(mkfs, "-F", "-q", diskPath).Run()
+	} else if mke2fs, err := exec.LookPath("mke2fs"); err == nil {
+		_ = exec.Command(mke2fs, "-t", "ext4", "-F", "-q", diskPath).Run()
+	}
+}
+
 // CreateVM spawns a cloud-hypervisor process in its own process group and cgroup v2 scope,
 // prepares disk, and configures the VM via its Unix socket.
 func (d *CloudHypervisorDriver) CreateVM(ctx context.Context, vm *models.VM) error {
@@ -191,6 +328,8 @@ func (d *CloudHypervisorDriver) CreateVM(ctx context.Context, vm *models.VM) err
 		}
 		_ = f.Truncate(100 * 1024 * 1024)
 		_ = f.Close()
+
+		ensureFormattedDisk(diskPath)
 	}
 
 	inst := &CHVMInstance{
@@ -214,6 +353,8 @@ func (d *CloudHypervisorDriver) CreateVM(ctx context.Context, vm *models.VM) err
 func (d *CloudHypervisorDriver) spawnProcess(ctx context.Context, inst *CHVMInstance) error {
 	_ = os.Remove(inst.SockPath)
 	_ = os.Remove(inst.VM.SerialSocket)
+
+	ensureFormattedDisk(inst.DiskPath)
 
 	memoryBytes := uint64(inst.VM.MemoryMB) * 1024 * 1024
 	cpuQuota := inst.VM.VCPUs * 100
@@ -363,16 +504,28 @@ func (d *CloudHypervisorDriver) BootVM(ctx context.Context, vmID string) error {
 
 	client := d.socketClient(inst.SockPath)
 
-	// Verify if process and socket are active; if not, re-spawn process
+	// Verify if process and socket are active and in bootable state
 	processAlive := false
 	if _, statErr := os.Stat(inst.SockPath); statErr == nil {
 		testReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/api/v1/vm.info", nil)
 		if resp, err := client.Do(testReq); err == nil {
+			var info struct {
+				State string `json:"state"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&info)
 			_ = resp.Body.Close()
-			processAlive = true
+			if info.State == "Created" {
+				processAlive = true
+			}
 		}
 	}
 	if !processAlive {
+		if inst.PGID > 0 {
+			_ = syscall.Kill(-inst.PGID, syscall.SIGKILL)
+		}
+		_ = os.Remove(inst.SockPath)
+		_ = os.Remove(inst.VM.SerialSocket)
+
 		if err := d.spawnProcess(ctx, inst); err != nil {
 			inst.State = models.StateError
 			return fmt.Errorf("failed to spawn hypervisor process: %w", err)
@@ -416,10 +569,25 @@ func (d *CloudHypervisorDriver) StopVM(ctx context.Context, vmID string) error {
 	}
 
 	client := d.socketClient(inst.SockPath)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPut, "http://localhost/api/v1/vm.shutdown", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPut, "http://localhost/api/v1/vmm.shutdown", nil)
 	if resp, err := client.Do(req); err == nil {
 		_ = resp.Body.Close()
+	} else if inst.Cmd != nil && inst.Cmd.Process != nil {
+		_ = inst.Cmd.Process.Kill()
 	}
+
+	if inst.PGID > 0 {
+		for i := 0; i < 5; i++ {
+			if err := syscall.Kill(-inst.PGID, 0); err != nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		_ = syscall.Kill(-inst.PGID, syscall.SIGKILL)
+	}
+
+	_ = os.Remove(inst.SockPath)
+	_ = os.Remove(inst.VM.SerialSocket)
 
 	inst.State = models.StateStopped
 	return nil
