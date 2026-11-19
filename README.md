@@ -12,11 +12,17 @@ A production-grade, lightweight, authenticated, and resource-aware virtual machi
 
 ## 📺 Project Resources
 
+- **Live Production Dashboard:** [https://hypervisor.hrittik.dev/](https://hypervisor.hrittik.dev/) (Direct IP: `http://3.108.242.236`)
 - **Demo Video:** [YouTube Video](https://www.youtube.com/watch?v=4qsTIsR8GiE)
 - **Orientation & Architecture Walkthrough:** [YouTube Video](https://www.youtube.com/watch?v=lNd5x0wZsCU)
 - **Official Presentation:** [`A3-PS023-TC219_AIORI3_Presentation.pdf`](A3-PS023-TC219_AIORI3_Presentation.pdf)
 - **Problem Statement:** PS-023 (Minimal Two-Node Cloud Hypervisor VM Controller)
 - **Team:** Team Disciples of GO / Team Episteme (A3-PS023-TC219)
+- **AWS 3-Node KVM Cluster:**
+  - Controller: `3.108.242.236` (Domain: `hypervisor.hrittik.dev`)
+  - Worker 1: `13.207.157.255` (c7i-flex.xlarge, KVM hardware acceleration)
+  - Worker 2: `52.66.162.60` (c7i-flex.xlarge, KVM hardware acceleration)
+  - Guest VM SSH: Port 443 with dynamic username routing (`ssh <vm_name>@<worker_ip> -p 443`)
 
 ---
 
