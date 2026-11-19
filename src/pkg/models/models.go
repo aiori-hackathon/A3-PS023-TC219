@@ -33,7 +33,7 @@ func IsValidTransition(from, to VMState) bool {
 	case StateStopped:
 		return to == StateRunning || to == StateDeleted || to == StateError
 	case StateError:
-		return to == StateDeleted || to == StateStopped
+		return to == StateDeleted || to == StateStopped || to == StateRunning
 	default:
 		return false
 	}

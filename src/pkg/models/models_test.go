@@ -22,6 +22,7 @@ func TestStateTransitions(t *testing.T) {
 		{StateStopped, StateRunning, true},
 		{StateStopped, StateDeleted, true},
 		{StateStopped, StateError, true},
+		{StateError, StateRunning, true},
 		{StateError, StateDeleted, true},
 		{StateDeleted, StateRunning, false},
 		{StateDeleted, StateCreated, false},
