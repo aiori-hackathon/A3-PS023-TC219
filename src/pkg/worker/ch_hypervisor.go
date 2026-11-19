@@ -67,7 +67,7 @@ func detectHostKernel() string {
 
 func ensureDefaultInitramfs(baseDir string) string {
 	initrdPath := filepath.Join(baseDir, "guest-initramfs.cpio.gz")
-	versionFile := filepath.Join(baseDir, ".initramfs.v6")
+	versionFile := filepath.Join(baseDir, ".initramfs.v7")
 	if _, err := os.Stat(initrdPath); err == nil {
 		if _, err := os.Stat(versionFile); err == nil {
 			return initrdPath
@@ -116,7 +116,7 @@ func ensureDefaultInitramfs(baseDir string) string {
 
 	// Search and copy virtio & ext4 kernel modules
 	targetModules := []string{
-		"virtio", "virtio_ring", "virtio_pci_modern_dev", "virtio_pci_legacy_dev",
+		"virtio_ring", "virtio", "virtio_pci_modern_dev", "virtio_pci_legacy_dev",
 		"virtio_pci", "virtio_blk", "crc16", "mbcache", "jbd2", "ext4",
 	}
 	moduleSearchPaths := []string{
@@ -159,15 +159,15 @@ mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 
-# Insert storage modules
-for m in virtio virtio_ring virtio_pci_modern_dev virtio_pci_legacy_dev virtio_pci virtio_blk crc16 mbcache jbd2 ext4; do
+# Insert storage modules in strict dependency order (virtio_ring BEFORE virtio)
+for m in virtio_ring virtio virtio_pci_modern_dev virtio_pci_legacy_dev virtio_pci virtio_blk crc16 mbcache jbd2 ext4; do
   if [ -f "/lib/modules/${m}.ko" ]; then
     insmod "/lib/modules/${m}.ko" 2>/dev/null || true
   fi
 done
 
-# Wait for /dev/vda to appear (up to 2 seconds)
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+# Wait for /dev/vda to appear (up to 3 seconds)
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
   [ -b /dev/vda ] && break
   sleep 0.1
 done
@@ -189,6 +189,7 @@ if [ -b /dev/vda ]; then
       chmod 1777 /new_root/tmp 2>/dev/null || true
     fi
 
+    # Create /init in new_root
     cat << 'INIT_EOF' > /new_root/init
 #!/bin/busybox sh
 /bin/busybox --install -s /bin 2>/dev/null || true
@@ -206,16 +207,7 @@ INIT_EOF
     umount /proc 2>/dev/null || true
     umount /dev 2>/dev/null || true
 
-    exec switch_root /new_root /bin/sh -c '
-      /bin/busybox --install -s /bin 2>/dev/null || true
-      mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-      mount -t proc proc /proc 2>/dev/null || true
-      mount -t sysfs sysfs /sys 2>/dev/null || true
-      while true; do
-        /bin/busybox getty -n -l /bin/sh -L 115200 ttyS0 vt100 2>/dev/null || /bin/busybox sh </dev/ttyS0 >/dev/ttyS0 2>&1 || /bin/busybox sh
-        sleep 1
-      done
-    '
+    exec switch_root /new_root /init
   fi
 fi
 
@@ -229,7 +221,7 @@ done
 
 	cmd := exec.Command("sh", "-c", fmt.Sprintf("cd %s && find . | cpio -o -H newc | gzip > %s", buildDir, initrdPath))
 	if err := cmd.Run(); err == nil {
-		_ = os.WriteFile(versionFile, []byte("v6"), 0644)
+		_ = os.WriteFile(versionFile, []byte("v7"), 0644)
 		return initrdPath
 	}
 	return ""
