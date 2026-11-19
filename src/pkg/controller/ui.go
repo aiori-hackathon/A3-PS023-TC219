@@ -248,11 +248,6 @@ function copySSH(ip, port, vmName) {
   copySSH443(ip, vmName);
 }
 
-function copyConsole(sock) {
-  var cmd = 'nc -U ' + sock;
-  copyText(cmd, 'Copied console command: ' + cmd);
-}
-
 var cachedVMs = [];
 var cachedWorkers = [];
 
@@ -435,7 +430,6 @@ function renderVMs(vms) {
         '</div>' :
         '<span style="font-size:12px;color:var(--text-muted);">' + escapeHtml(connText) + '</span>'
       ) +
-      (vm.serial_socket ? '<br><span class="ip-tag" style="margin-top:4px;color:#a3e635;font-size:11px;cursor:pointer;" onclick="copyConsole(\'' + escapeHtml(vm.serial_socket) + '\')" title="Click to copy serial console command">Socket: nc -U</span>' : '') +
       '</td>' +
       '<td><span class="badge state-' + state + '">' + state + '</span>' +
       (vm.error_message ? '<br><small style="color: #f87171; font-size: 10px;">' + escapeHtml(vm.error_message) + '</small>' : '') +
