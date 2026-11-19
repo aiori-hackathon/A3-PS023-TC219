@@ -15,6 +15,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// VMResolver dynamically resolves an SSH username to a VM's Unix domain serial socket path and display name.
+type VMResolver func(username string) (sockPath string, vmName string, err error)
+
 // SSHBridge provides an SSH server endpoint that bridges incoming SSH sessions
 // to a VM's Unix domain serial console socket.
 type SSHBridge struct {
@@ -22,6 +25,7 @@ type SSHBridge struct {
 	sockPath  string
 	port      int
 	hostKey   ssh.Signer
+	resolver  VMResolver
 	stopCh    chan struct{}
 	closeOnce sync.Once
 }
@@ -60,6 +64,11 @@ func generateHostKey() (ssh.Signer, error) {
 // StartSSHBridge launches a local SSH server listening on 0.0.0.0:<port>
 // and bridges interactive SSH sessions to the VM's serial socket.
 func StartSSHBridge(sockPath string, port int, signer ssh.Signer) (*SSHBridge, error) {
+	return StartSSHBridgeWithResolver(sockPath, port, signer, nil)
+}
+
+// StartSSHBridgeWithResolver launches a local SSH server with dynamic VM username routing.
+func StartSSHBridgeWithResolver(sockPath string, port int, signer ssh.Signer, resolver VMResolver) (*SSHBridge, error) {
 	if signer == nil {
 		var err error
 		signer, err = generateHostKey()
@@ -78,6 +87,7 @@ func StartSSHBridge(sockPath string, port int, signer ssh.Signer) (*SSHBridge, e
 		sockPath: sockPath,
 		port:     port,
 		hostKey:  signer,
+		resolver: resolver,
 		stopCh:   make(chan struct{}),
 	}
 
@@ -173,16 +183,40 @@ func (b *SSHBridge) handleSession(sConn *ssh.ServerConn, channel ssh.Channel, re
 }
 
 func (b *SSHBridge) bridgeToSerial(sConn *ssh.ServerConn, channel ssh.Channel) {
-	sockConn, err := net.Dial("unix", b.sockPath)
+	targetSock := b.sockPath
+	displayName := ""
+
+	if b.resolver != nil {
+		resolvedSock, name, err := b.resolver(sConn.User())
+		if err != nil {
+			msg := fmt.Sprintf("\r\n==========================================================\r\n"+
+				" [SSH Bridge Routing Error]\r\n"+
+				" %v\r\n"+
+				"==========================================================\r\n\r\n", err)
+			_, _ = channel.Write([]byte(msg))
+			_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
+			_ = channel.Close()
+			_ = sConn.Close()
+			return
+		}
+		targetSock = resolvedSock
+		displayName = name
+	}
+
+	sockConn, err := net.Dial("unix", targetSock)
 	if err != nil {
-		_, _ = channel.Write([]byte(fmt.Sprintf("\r\n[SSH Bridge] Error connecting to VM serial console: %v\r\n", err)))
+		_, _ = channel.Write([]byte(fmt.Sprintf("\r\n[SSH Bridge] Error connecting to VM serial console (%s): %v\r\n", targetSock, err)))
 		return
 	}
 	defer sockConn.Close()
 
+	if displayName == "" {
+		displayName = "MINIX 3 / Microkernel"
+	}
+
 	banner := "\r\n" +
 		"==========================================================\r\n" +
-		" Welcome to MINIX 3 / Microkernel Guest VM\r\n" +
+		fmt.Sprintf(" Connected to VM: %s\r\n", displayName) +
 		" Node: Cloud Hypervisor on Linux KVM\r\n" +
 		" Interactive shell ready.\r\n" +
 		" Disconnect: press Ctrl+D\r\n" +

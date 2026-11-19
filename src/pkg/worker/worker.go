@@ -151,7 +151,7 @@ func (w *Worker) recoverVMs() {
 			// Restore SSH Bridge
 			if vm.SSHPort > 0 && vm.SerialSocket != "" {
 				if _, err := os.Stat(vm.SerialSocket); err == nil {
-					bridge, err := StartSSHBridge(vm.SerialSocket, vm.SSHPort, w.sshSigner)
+					bridge, err := StartSSHBridgeWithResolver(vm.SerialSocket, vm.SSHPort, w.sshSigner, w.resolveVMForSSH)
 					if err == nil {
 						w.sshBridges[vm.ID] = bridge
 						w.allocatedPorts[vm.SSHPort] = true
@@ -159,7 +159,7 @@ func (w *Worker) recoverVMs() {
 					} else {
 						// Port might have been taken; allocate new port
 						newPort := w.allocatePortLocked()
-						bridge, err := StartSSHBridge(vm.SerialSocket, newPort, w.sshSigner)
+						bridge, err := StartSSHBridgeWithResolver(vm.SerialSocket, newPort, w.sshSigner, w.resolveVMForSSH)
 						if err == nil {
 							w.sshBridges[vm.ID] = bridge
 							w.allocatedPorts[newPort] = true
@@ -183,6 +183,56 @@ func (w *Worker) recoverVMs() {
 		w.saveVMLocked(vm)
 		log.Printf("[Worker %s] Recovered VM %s (%s) in state %s from SQLite", w.cfg.ID, vm.ID, vm.Name, vm.State)
 	}
+}
+
+func (w *Worker) resolveVMForSSH(username string) (string, string, error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	cleanUser := strings.TrimSpace(username)
+
+	// 1. Direct match by Name or ID
+	for _, vm := range w.vms {
+		if vm.State == models.StateRunning && (strings.EqualFold(vm.Name, cleanUser) || strings.EqualFold(vm.ID, cleanUser)) {
+			if vm.SerialSocket != "" {
+				if _, err := os.Stat(vm.SerialSocket); err == nil {
+					return vm.SerialSocket, fmt.Sprintf("%s (%s)", vm.Name, vm.ID), nil
+				}
+			}
+		}
+	}
+
+	// 2. Default fallback if username is "minix", "root", or empty:
+	// connect to the single or most recently updated running VM
+	if cleanUser == "minix" || cleanUser == "root" || cleanUser == "" {
+		var latestVM *models.VM
+		for _, vm := range w.vms {
+			if vm.State == models.StateRunning && vm.SerialSocket != "" {
+				if _, err := os.Stat(vm.SerialSocket); err == nil {
+					if latestVM == nil || vm.UpdatedAt.After(latestVM.UpdatedAt) {
+						latestVM = vm
+					}
+				}
+			}
+		}
+		if latestVM != nil {
+			return latestVM.SerialSocket, fmt.Sprintf("%s (%s)", latestVM.Name, latestVM.ID), nil
+		}
+	}
+
+	// 3. Not found - list all currently running VMs to guide the user
+	var running []string
+	for _, vm := range w.vms {
+		if vm.State == models.StateRunning {
+			running = append(running, fmt.Sprintf("'%s' (%s)", vm.Name, vm.ID))
+		}
+	}
+	if len(running) == 0 {
+		return "", "", fmt.Errorf("no running VMs found on worker %s", w.cfg.ID)
+	}
+
+	return "", "", fmt.Errorf("VM '%s' not found.\nRunning VMs on worker %s: %s\nConnect using: ssh <vm_name>@<worker_ip> -p 443",
+		cleanUser, w.cfg.ID, strings.Join(running, ", "))
 }
 
 func (w *Worker) allocatePortLocked() int {
@@ -410,7 +460,7 @@ func (w *Worker) BootVM(ctx context.Context, vmID string) error {
 		if _, err := os.Stat(serialSock); err == nil {
 			if _, exists := w.sshBridges[vm.ID]; !exists {
 				port := w.allocatePortLocked()
-				bridge, err := StartSSHBridge(serialSock, port, w.sshSigner)
+				bridge, err := StartSSHBridgeWithResolver(serialSock, port, w.sshSigner, w.resolveVMForSSH)
 				if err == nil {
 					w.sshBridges[vm.ID] = bridge
 					vm.SSHPort = port

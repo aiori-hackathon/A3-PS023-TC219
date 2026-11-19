@@ -618,3 +618,80 @@ func TestMockHypervisorSSHBridge(t *testing.T) {
 		t.Fatalf("failed to stop vm: %v", err)
 	}
 }
+
+func TestSSHUsernameRouting(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "worker-ssh-route-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	driver := NewMockHypervisor(tempDir)
+	w := NewWorker(Config{
+		ID:               "route-worker",
+		Token:            "test-token",
+		TotalMemoryMB:    4096,
+		ReservedMemoryMB: 512,
+		DataDir:          tempDir,
+		Driver:           driver,
+	})
+	defer w.Close()
+
+	ctx := context.Background()
+
+	// 1. Create two VMs: alpha and beta
+	vmAlpha, err := w.CreateVM(ctx, models.CreateVMRequest{
+		ID:       "vm-alpha",
+		Name:     "alpha-server",
+		VCPUs:    1,
+		MemoryMB: 512,
+		AutoBoot: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to create vm-alpha: %v", err)
+	}
+
+	vmBeta, err := w.CreateVM(ctx, models.CreateVMRequest{
+		ID:       "vm-beta",
+		Name:     "beta-server",
+		VCPUs:    1,
+		MemoryMB: 512,
+		AutoBoot: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to create vm-beta: %v", err)
+	}
+
+	// Test resolver directly
+	sockAlpha, nameAlpha, err := w.resolveVMForSSH("alpha-server")
+	if err != nil || !strings.Contains(sockAlpha, "vm-alpha") || !strings.Contains(nameAlpha, "alpha-server") {
+		t.Errorf("failed resolving alpha-server: sock=%s, name=%s, err=%v", sockAlpha, nameAlpha, err)
+	}
+
+	sockBeta, nameBeta, err := w.resolveVMForSSH("beta-server")
+	if err != nil || !strings.Contains(sockBeta, "vm-beta") || !strings.Contains(nameBeta, "beta-server") {
+		t.Errorf("failed resolving beta-server: sock=%s, name=%s, err=%v", sockBeta, nameBeta, err)
+	}
+
+	// Test ID resolution
+	sockAlphaByID, _, err := w.resolveVMForSSH("vm-alpha")
+	if err != nil || sockAlphaByID != sockAlpha {
+		t.Errorf("failed resolving vm-alpha by ID: sock=%s, err=%v", sockAlphaByID, err)
+	}
+
+	// Test default 'minix' fallback
+	sockDefault, nameDefault, err := w.resolveVMForSSH("minix")
+	if err != nil || sockDefault == "" || nameDefault == "" {
+		t.Errorf("failed resolving minix default fallback: err=%v", err)
+	}
+
+	// Test unknown VM gives informative error
+	_, _, err = w.resolveVMForSSH("unknown-vm")
+	if err == nil || !strings.Contains(err.Error(), "Running VMs on worker") {
+		t.Errorf("expected helpful error for unknown VM, got: %v", err)
+	}
+
+	// Cleanup
+	_ = w.StopVM(ctx, vmAlpha.ID)
+	_ = w.StopVM(ctx, vmBeta.ID)
+}
