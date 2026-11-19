@@ -67,7 +67,7 @@ func detectHostKernel() string {
 
 func ensureDefaultInitramfs(baseDir string) string {
 	initrdPath := filepath.Join(baseDir, "guest-initramfs.cpio.gz")
-	versionFile := filepath.Join(baseDir, ".initramfs.v7")
+	versionFile := filepath.Join(baseDir, ".initramfs.v8")
 	if _, err := os.Stat(initrdPath); err == nil {
 		if _, err := os.Stat(versionFile); err == nil {
 			return initrdPath
@@ -184,7 +184,7 @@ if [ -b /dev/vda ]; then
     if [ ! -f /new_root/bin/busybox ]; then
       mkdir -p /new_root/bin /new_root/sbin /new_root/dev /new_root/proc /new_root/sys /new_root/root /new_root/tmp /new_root/lib /new_root/etc
       cp /bin/busybox /new_root/bin/busybox
-      /new_root/bin/busybox --install -s /new_root/bin 2>/dev/null || true
+      (cd /new_root/bin && for a in $(/bin/busybox --list); do ln -sf busybox "$a"; done)
       [ -d /lib ] && cp -a /lib/* /new_root/lib/ 2>/dev/null || true
       chmod 1777 /new_root/tmp 2>/dev/null || true
     fi
@@ -192,10 +192,10 @@ if [ -b /dev/vda ]; then
     # Create /init in new_root
     cat << 'INIT_EOF' > /new_root/init
 #!/bin/busybox sh
-/bin/busybox --install -s /bin 2>/dev/null || true
-mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-mount -t proc proc /proc 2>/dev/null || true
-mount -t sysfs sysfs /sys 2>/dev/null || true
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+/bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+/bin/busybox mount -t proc proc /proc 2>/dev/null || true
+/bin/busybox mount -t sysfs sysfs /sys 2>/dev/null || true
 while true; do
   /bin/busybox getty -n -l /bin/sh -L 115200 ttyS0 vt100 2>/dev/null || /bin/busybox sh </dev/ttyS0 >/dev/ttyS0 2>&1 || /bin/busybox sh
   sleep 1
@@ -221,7 +221,7 @@ done
 
 	cmd := exec.Command("sh", "-c", fmt.Sprintf("cd %s && find . | cpio -o -H newc | gzip > %s", buildDir, initrdPath))
 	if err := cmd.Run(); err == nil {
-		_ = os.WriteFile(versionFile, []byte("v7"), 0644)
+		_ = os.WriteFile(versionFile, []byte("v8"), 0644)
 		return initrdPath
 	}
 	return ""
