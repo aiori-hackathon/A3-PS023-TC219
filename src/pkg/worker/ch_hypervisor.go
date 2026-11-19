@@ -560,6 +560,15 @@ func (d *CloudHypervisorDriver) StopVM(ctx context.Context, vmID string) error {
 		return nil
 	}
 
+	// Attempt to flush disk buffers via serial console before terminating
+	if inst.VM.SerialSocket != "" {
+		if conn, err := net.DialTimeout("unix", inst.VM.SerialSocket, 500*time.Millisecond); err == nil {
+			_, _ = conn.Write([]byte("\nsync\n"))
+			time.Sleep(200 * time.Millisecond)
+			_ = conn.Close()
+		}
+	}
+
 	client := d.socketClient(inst.SockPath)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPut, "http://localhost/api/v1/vmm.shutdown", nil)
 	if resp, err := client.Do(req); err == nil {
