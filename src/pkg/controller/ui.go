@@ -241,14 +241,7 @@ function copySSH443(ip, vmName) {
   var host = (ip && ip !== '127.0.0.1' && ip !== '0.0.0.0') ? ip : ((window.location && window.location.hostname) ? window.location.hostname : '127.0.0.1');
   var user = (vmName || 'minix').replace(/[^a-zA-Z0-9_-]/g, '') || 'minix';
   var cmd = 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ' + user + '@' + host + ' -p 443';
-  copyText(cmd, 'Copied Port 443 SSH: ' + cmd);
-}
-
-function copyDirectSSH(ip, port) {
-  var host = (ip && ip !== '127.0.0.1' && ip !== '0.0.0.0') ? ip : ((window.location && window.location.hostname) ? window.location.hostname : '127.0.0.1');
-  var p = port && port !== 22 ? ' -p ' + port : '';
-  var cmd = 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null minix@' + host + p;
-  copyText(cmd, 'Copied Direct Port SSH: ' + cmd);
+  copyText(cmd, 'Copied: ' + cmd);
 }
 
 function copySSH(ip, port, vmName) {
@@ -434,18 +427,11 @@ function renderVMs(vms) {
       '<td><span class="os-badge">' + escapeHtml(os) + '</span></td>' +
       '<td>' +
       (port > 0 ? 
-        '<div style="display:flex; flex-direction:column; gap:6px; min-width:270px;">' +
-        '  <div style="background:#0f172a; border:1px solid #2563eb; border-radius:6px; padding:6px 8px;">' +
-        '    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">' +
-        '      <span style="font-size:11px; font-weight:700; color:#38bdf8;">⚡ Port 443 (Firewall-Friendly)</span>' +
-        '      <button class="btn btn-sm" onclick="copySSH443(\'' + ip + '\', \'' + escapeHtml(vm.name) + '\')" style="padding:2px 8px; font-size:11px; background:#2563eb;">📋 Copy</button>' +
-        '    </div>' +
-        '    <input type="text" readonly value="' + escapeHtml(sshCmd) + '" onclick="this.select();copySSH443(\'' + ip + '\', \'' + escapeHtml(vm.name) + '\');" style="width:100%; font-family:monospace; font-size:11px; background:#1e293b; border:1px solid #334155; color:#f8fafc; border-radius:4px; padding:4px 6px; cursor:pointer;" title="Click to copy">' +
-        '  </div>' +
-        '  <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#94a3b8; padding:0 2px;">' +
-        '    <span>Direct: <code style="color:#cbd5e1;">' + escapeHtml(host + ':' + port) + '</code></span>' +
-        '    <button class="btn btn-secondary btn-sm" onclick="copyDirectSSH(\'' + ip + '\', ' + port + ')" style="padding:1px 6px; font-size:10px;">📋 Copy Port ' + port + '</button>' +
-        '  </div>' +
+        '<div style="display:flex; flex-direction:column; gap:5px;">' +
+        '  <span class="ip-tag" onclick="copySSH443(\'' + ip + '\', \'' + escapeHtml(vm.name) + '\')" title="Click to copy: ' + escapeHtml(sshCmd) + '" style="cursor:pointer; width:fit-content;">' +
+        '    <strong>' + escapeHtml(connText) + '</strong> <span style="background:rgba(56,189,248,0.25);padding:1px 5px;border-radius:4px;color:#38bdf8;font-size:11px;">📋 Copy SSH</span>' +
+        '  </span>' +
+        '  <input type="text" readonly value="' + escapeHtml(sshCmd) + '" onclick="this.select();copySSH443(\'' + ip + '\', \'' + escapeHtml(vm.name) + '\');" style="font-family:monospace;font-size:11px;background:#0f172a;border:1px solid #334155;color:#94a3b8;border-radius:4px;padding:3px 6px;width:100%;max-width:260px;cursor:pointer;" title="Click to select & copy command">' +
         '</div>' :
         '<span style="font-size:12px;color:var(--text-muted);">' + escapeHtml(connText) + '</span>'
       ) +
